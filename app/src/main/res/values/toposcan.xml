@@ -11,8 +11,13 @@
     <string name="toposcan_resolution">Rendering width limit</string>
     <string name="toposcan_preview">Preview (2 minutes)</string>
     <string name="toposcan_hdr_bypass">Standard playback: %1$s</string>
-    <string name="toposcan_hdr_enable">HDR10 effect</string>
-    <string name="toposcan_hdr_status">HDR10 status</string>
+    <string name="toposcan_hdr_enable">HDR effect</string>
+    <string name="toposcan_hdr_status">HDR status</string>
+    <string name="toposcan_hdr_output">HDR output</string>
+    <string-array name="toposcan_hdr_output_entries"><item>Auto</item><item>HDR10</item><item>HLG (experimental)</item></string-array>
+    <string-array name="toposcan_hdr_output_values"><item>auto</item><item>hdr10</item><item>hlg</item></string-array>
+    <string name="toposcan_playback_status">Playback status</string>
+    <string name="toposcan_not_started">No preview recorded</string>
     <string-array name="toposcan_band_values"><item>1</item><item>2</item><item>3</item><item>4</item><item>6</item><item>8</item><item>12</item></string-array>
     <string-array name="toposcan_scan_values"><item>8</item><item>16</item><item>24</item><item>32</item><item>48</item><item>64</item><item>96</item></string-array>
     <string-array name="toposcan_delay_values"><item>0</item><item>1</item><item>2</item><item>4</item><item>8</item><item>12</item><item>16</item></string-array>

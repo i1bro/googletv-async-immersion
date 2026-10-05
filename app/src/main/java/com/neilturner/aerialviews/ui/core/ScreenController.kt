@@ -1174,6 +1174,7 @@ class ScreenController(
         videoPlayer.toposcan = effect
         imagePlayer.toposcan = effect
         effect.onSurfaceReady = { videoPlayer.setToposcanSurface(it) }
+        effect.onVideoFrameReady = { videoPlayer.startToposcanVideo() }
         effect.onFinished = { if (!isStopped && !blackOutMode) fadeOutCurrentItem() }
         effect.onFailure = { restoreStandardPlayback() }
         effect.onColourModeRequired = { switchToposcanColourMode(it) }

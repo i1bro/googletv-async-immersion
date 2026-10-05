@@ -27,6 +27,7 @@ import com.neilturner.aerialviews.ui.helpers.PermissionHelper
 import com.neilturner.aerialviews.ui.helpers.RefreshRateHelper
 import com.neilturner.aerialviews.ui.helpers.VolumeHelper
 import com.neilturner.aerialviews.ui.toposcan.ToposcanView
+import com.neilturner.aerialviews.ui.toposcan.VideoStartGate
 import com.neilturner.aerialviews.utils.FirebaseHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,34 +49,47 @@ class VideoPlayerView
         Player.Listener {
         private lateinit var exoPlayer: ExoPlayer
         var toposcan: ToposcanView? = null
-        private var effectStarted = false
+        private val effectStart = VideoStartGate()
 
         fun setToposcanSurface(surface: Surface) {
-            effectStarted = false
+            effectStart.reset()
             exoPlayer.setVideoSurface(surface)
+            startToposcanVideo()
         }
 
         override fun onRenderedFirstFrame() {
-            if (effectStarted || toposcan == null) return
-            effectStarted = true
-            val format = exoPlayer.videoFormat
-            if (format != null && toposcan?.acceptsVideo(format) != true) return
+            startToposcanVideo()
+        }
+
+        fun startToposcanVideo() {
+            if (isDestroyed || !effectStart.requested) return
+            val effect = toposcan ?: return
+            val format = exoPlayer.videoFormat ?: return
+            if (!effect.acceptsVideo(format)) return
+            if (!effectStart.claim(effect.hasVideoFrame, true, effect.videoSurface != null)) return
             val size = exoPlayer.videoSize
-            toposcan?.beginVideo(
-                size.width.toFloat() * size.pixelWidthHeightRatio / size.height.coerceAtLeast(1),
-                format?.frameRate ?: 30f,
-                format?.colorInfo,
+            val w = size.width.takeIf { it > 0 } ?: format.width.coerceAtLeast(1)
+            val h = size.height.takeIf { it > 0 } ?: format.height.coerceAtLeast(1)
+            effect.beginVideo(
+                w.toFloat() * size.pixelWidthHeightRatio / h,
+                format.frameRate,
+                format.colorInfo,
             )
         }
 
         override fun onTracksChanged(tracks: Tracks) {
-            if (toposcan == null) return
+            if (toposcan == null || !effectStart.requested) return
             for (group in tracks.groups) {
                 if (group.type != C.TRACK_TYPE_VIDEO) continue
                 for (index in 0 until group.length) {
                     if (group.isTrackSelected(index) && toposcan?.acceptsVideo(group.getTrackFormat(index)) != true) return
                 }
             }
+            startToposcanVideo()
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) startToposcanVideo()
         }
 
         private var state = VideoState()
@@ -155,7 +169,8 @@ class VideoPlayerView
         }
 
         fun setVideo(media: AerialMedia) {
-            effectStarted = false
+            effectStart.request()
+            toposcan?.awaitVideoFrame()
             state = VideoState() // Reset params for each video
             state.type = media.source
             cancelVolumeFade()
@@ -253,6 +268,7 @@ class VideoPlayerView
         }
 
         fun stop() {
+            effectStart.cancel()
             removeCallbacks(almostFinishedRunnable)
             exoPlayer.stop()
         }
@@ -384,6 +400,7 @@ class VideoPlayerView
         @OptIn(UnstableApi::class)
         override fun onVideoSizeChanged(videoSize: VideoSize) {
             super.onVideoSizeChanged(videoSize)
+            startToposcanVideo()
 
             val w = videoSize.width
             val h = videoSize.height

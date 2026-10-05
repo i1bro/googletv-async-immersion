@@ -15,22 +15,28 @@ import androidx.media3.effect.DefaultVideoFrameProcessor.WORKING_COLOR_SPACE_LIN
 @SuppressLint("RestrictedApi")
 class HdrFramePipeline(
     private val context: Context,
+    private val outputMode: HdrOutput = HdrOutput.HDR10,
 ) {
     private var input: DefaultShaderProgram? = null
     private var inputColour: ColorInfo? = null
+    private val hlgOutput = if (outputMode == HdrOutput.HLG) HlgOutputShader() else null
     private val output =
-        DefaultShaderProgram.createApplyingOetf(
-            context,
-            emptyList(),
-            emptyList(),
-            ColorInfo
-                .Builder()
-                .setColorSpace(C.COLOR_SPACE_BT2020)
-                .setColorTransfer(C.COLOR_TRANSFER_ST2084)
-                .setColorRange(C.COLOR_RANGE_FULL)
-                .build(),
-            WORKING_COLOR_SPACE_LINEAR,
-        )
+        if (outputMode == HdrOutput.HDR10) {
+            DefaultShaderProgram.createApplyingOetf(
+                context,
+                emptyList(),
+                emptyList(),
+                ColorInfo
+                    .Builder()
+                    .setColorSpace(C.COLOR_SPACE_BT2020)
+                    .setColorTransfer(C.COLOR_TRANSFER_ST2084)
+                    .setColorRange(C.COLOR_RANGE_FULL)
+                    .build(),
+                WORKING_COLOR_SPACE_LINEAR,
+            )
+        } else {
+            null
+        }
     private val crop = FloatArray(16)
     private val sampling = FloatArray(16)
 
@@ -55,7 +61,8 @@ class HdrFramePipeline(
                     false,
                 )
             inputColour = colour
-            HdrStaticMetadata.apply(colour.hdrStaticInfo)
+            // HLG is scene-referred; do not attach the source PQ mastering metadata to it.
+            if (outputMode == HdrOutput.HDR10) HdrStaticMetadata.apply(colour.hdrStaticInfo)
         }
         input?.configure(width, height)
         configureOutput(width, height)
@@ -82,18 +89,19 @@ class HdrFramePipeline(
     }
 
     fun present(linearTexture: Int) {
-        output.drawFrame(linearTexture, 0)
+        hlgOutput?.draw(linearTexture) ?: output?.drawFrame(linearTexture, 0)
     }
 
     internal fun configureOutput(
         width: Int,
         height: Int,
     ) {
-        output.configure(width, height)
+        output?.configure(width, height)
     }
 
     fun release() {
         input?.release()
-        output.release()
+        output?.release()
+        hlgOutput?.release()
     }
 }

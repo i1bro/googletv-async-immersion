@@ -19,6 +19,7 @@ import android.opengl.GLES20.GL_MAX_RENDERBUFFER_SIZE
 import android.opengl.GLES20.GL_MAX_TEXTURE_SIZE
 import android.opengl.GLES20.GL_MAX_VIEWPORT_DIMS
 import android.opengl.GLES20.GL_NO_ERROR
+import android.opengl.GLES20.GL_RENDERER
 import android.opengl.GLES20.GL_RGBA
 import android.opengl.GLES20.GL_SCISSOR_TEST
 import android.opengl.GLES20.GL_TEXTURE0
@@ -58,6 +59,7 @@ import android.opengl.GLES20.glGetProgramInfoLog
 import android.opengl.GLES20.glGetProgramiv
 import android.opengl.GLES20.glGetShaderInfoLog
 import android.opengl.GLES20.glGetShaderiv
+import android.opengl.GLES20.glGetString
 import android.opengl.GLES20.glGetUniformLocation
 import android.opengl.GLES20.glLinkProgram
 import android.opengl.GLES20.glScissor
@@ -86,6 +88,7 @@ import timber.log.Timber
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -97,6 +100,7 @@ class ToposcanView(
 ) : GLSurfaceView(context),
     Choreographer.FrameCallback {
     var onSurfaceReady: ((Surface) -> Unit)? = null
+    var onVideoFrameReady: (() -> Unit)? = null
     var onFinished: (() -> Unit)? = null
     var onFailure: (() -> Unit)? = null
     var onUnsupportedContent: ((String) -> Unit)? = null
@@ -105,13 +109,21 @@ class ToposcanView(
         private set
 
     @Volatile
+    var hasVideoFrame = false
+        private set
+
+    @Volatile
+    private var videoDescription = "Waiting for video metadata"
+
+    @Volatile
     var frameState = FrameState(ScanPhase.WAIT, 0.0, false, 1f)
         private set
     private var released = false
     private var bypassRequested = false
     private var modeChangeRequested = false
     private val hdrSupport = HdrSupport.inspect(context)
-    private val hdrEgl = if (hdrMode) HdrEgl() else null
+    private val hdrOutput = hdrSupport.output ?: HdrOutput.HDR10
+    private val hdrEgl = if (hdrMode) HdrEgl(hdrOutput) else null
     private var maxTextureSize = 2048
 
     @Volatile
@@ -130,6 +142,7 @@ class ToposcanView(
     private val renderer = ScanRenderer()
 
     init {
+        GeneralPrefs.toposcanPlaybackStatus = "Starting ${if (hdrMode) hdrOutput.label else "SDR"}; waiting for EGL surface"
         if (hdrEgl != null) {
             holder.setFormat(PixelFormat.RGBA_1010102)
             setEGLConfigChooser(hdrEgl)
@@ -164,6 +177,9 @@ class ToposcanView(
     }
 
     fun acceptsVideo(format: Format): Boolean {
+        videoDescription =
+            "${format.sampleMimeType} (${format.codecs.orEmpty()}) ${format.width}x${format.height}, ${format.frameRate} fps\n" +
+            (format.colorInfo?.toString() ?: "Colour metadata unavailable")
         if (VideoColourPolicy.requiresStandardPlayer(format)) {
             bypassUnsupportedContent("HLG, Dolby Vision or unsupported wide-colour format")
             return false
@@ -191,6 +207,7 @@ class ToposcanView(
         post {
             if (!released) {
                 GeneralPrefs.toposcanHdrStatus = reason
+                GeneralPrefs.toposcanPlaybackStatus = "Standard playback: $reason\n${GeneralPrefs.toposcanPlaybackStatus}"
                 onUnsupportedContent?.invoke(reason)
             }
         }
@@ -215,6 +232,11 @@ class ToposcanView(
         if (!released) queueEvent { renderer.beginVideo(aspect, fps, colour) }
     }
 
+    fun awaitVideoFrame() {
+        hasVideoFrame = false
+        if (!released) queueEvent { renderer.awaitVideoFrame() }
+    }
+
     fun beginImage(bitmap: Bitmap) {
         if (released) {
             bitmap.recycle()
@@ -236,6 +258,7 @@ class ToposcanView(
         released = true
         Choreographer.getInstance().removeFrameCallback(this)
         onSurfaceReady = null
+        onVideoFrameReady = null
         onFinished = null
         onFailure = null
         onUnsupportedContent = null
@@ -254,6 +277,14 @@ class ToposcanView(
         val timeline = ScanTimeline(settings)
         var blackout = false
         private val pendingFrame = AtomicBoolean()
+        private val frameCallbacks = AtomicLong()
+        private var videoRequested = false
+        private var pollingFrames = false
+        private var lastFramePoll = 0L
+        private var frames = 0L
+        private var draws = 0L
+        private var lastStatus = 0L
+        private var gpu = "Unknown GPU"
         private var surfaceTexture: SurfaceTexture? = null
         private var surface: Surface? = null
         private var oes = 0
@@ -291,10 +322,13 @@ class ToposcanView(
             config: EGLConfig?,
         ) {
             try {
+                gpu = glGetString(GL_RENDERER).orEmpty()
+                hasVideoFrame = false
                 if (hdrMode) {
+                    check(hdrSupport.available) { hdrSupport.reason }
                     check(hdrEgl?.ready == true) { hdrEgl?.failure ?: "HDR EGL unavailable" }
                     check(GlUtil.isYuvTargetExtensionSupported()) { "GPU lacks GL_EXT_YUV_target for HDR decoder frames" }
-                    hdrPipeline = HdrFramePipeline(context)
+                    hdrPipeline = HdrFramePipeline(context, hdrOutput)
                 }
                 val limit = IntArray(2)
                 glGetIntegerv(GL_MAX_TEXTURE_SIZE, limit, 0)
@@ -328,11 +362,13 @@ class ToposcanView(
                 surfaceTexture =
                     SurfaceTexture(oes).apply {
                         setOnFrameAvailableListener {
+                            frameCallbacks.incrementAndGet()
                             pendingFrame.set(true)
                             requestRender()
                         }
                     }
                 surface = Surface(surfaceTexture)
+                reportStatus(force = true)
                 post {
                     if (!released) {
                         videoSurface = surface
@@ -372,7 +408,7 @@ class ToposcanView(
                 }
                 check(glGetError() == GL_NO_ERROR) { "Toposcan texture allocation failed: ${w}x$h" }
                 renderSize = RenderSize(w, h)
-                val status = if (hdrMode) "HDR10 / BT.2020 PQ / RGB10_A2 output / FP16 processing" else "SDR / RGB8"
+                val status = if (hdrMode) "${hdrOutput.label} / RGB10_A2 output / FP16 processing" else "SDR / RGB8"
                 Timber.i("Toposcan buffer: ${w}x$h, $status; working textures: ${w.toLong() * h * (if (hdrMode) 32 else 12) / 1048576} MiB")
                 if (hdrMode) post { GeneralPrefs.toposcanHdrStatus = "${w}x$h $status" }
                 glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -383,6 +419,7 @@ class ToposcanView(
                     pendingImage = null
                     beginImage(it)
                 }
+                reportStatus(force = true)
             } catch (e: Exception) {
                 fail(e)
             }
@@ -402,12 +439,25 @@ class ToposcanView(
                 firstVideoFrame = true
                 active = true
                 lastWall = System.nanoTime()
+                reportStatus(force = true)
             } catch (e: Exception) {
                 fail(e)
             }
         }
 
+        fun awaitVideoFrame() {
+            videoRequested = true
+            pendingFrame.set(false)
+            hasVideoFrame = false
+            lastVideoTimestamp = Long.MIN_VALUE
+            lastFramePoll = System.nanoTime()
+            frameCallbacks.set(0)
+            frames = 0
+            draws = 0
+        }
+
         fun beginImage(bitmap: Bitmap) {
+            videoRequested = false
             if (scene == 0 || width <= 1 || height <= 1) {
                 pendingImage?.recycle()
                 pendingImage = bitmap
@@ -445,23 +495,35 @@ class ToposcanView(
         override fun onDrawFrame(gl: GL10?) {
             if (failed) return
             try {
+                val now = System.nanoTime()
                 var timestamp: Long? = null
-                if (pendingFrame.getAndSet(false)) {
+                val signalled = pendingFrame.getAndSet(false)
+                if (signalled) pollingFrames = false
+                // Some decoder/firmware combinations omit frame callbacks. Poll only after a gap,
+                // then use timestamps to avoid advancing the scan twice for the same frame.
+                if (signalled || (videoRequested && (pollingFrames || now - lastFramePoll >= 250_000_000L))) {
+                    lastFramePoll = now
                     surfaceTexture?.updateTexImage()
                     surfaceTexture?.getTransformMatrix(transform)
                     val latest = surfaceTexture?.timestamp
-                    if (latest != lastVideoTimestamp) {
+                    if (latest != null && (signalled || latest != 0L) && latest != lastVideoTimestamp) {
+                        if (!signalled) pollingFrames = true
                         timestamp = latest
-                        lastVideoTimestamp = latest ?: Long.MIN_VALUE
+                        lastVideoTimestamp = latest
+                        frames++
+                        if (!hasVideoFrame) {
+                            hasVideoFrame = true
+                            post { if (!released && hasVideoFrame) onVideoFrameReady?.invoke() }
+                        }
                     }
                 }
+                reportStatus()
                 if (!active || blackout) {
                     glBindFramebuffer(GL_FRAMEBUFFER, 0)
                     glClearColor(0f, 0f, 0f, 1f)
                     glClear(GL_COLOR_BUFFER_BIT)
                     return
                 }
-                val now = System.nanoTime()
                 val elapsed = (now - lastWall) / 1e9
                 lastWall = now
                 if (!timeline.paused && timeline.video &&
@@ -503,9 +565,23 @@ class ToposcanView(
                 }
                 val error = glGetError()
                 check(error == GL_NO_ERROR) { "Toposcan GL error: $error" }
+                draws++
             } catch (e: Exception) {
                 fail(e)
             }
+        }
+
+        private fun reportStatus(force: Boolean = false) {
+            val now = System.nanoTime()
+            if (!force && now - lastStatus < 1_000_000_000L) return
+            lastStatus = now
+            val status =
+                "${if (hdrMode) hdrOutput.label else "SDR"} ${width}x$height / $gpu\n" +
+                    "$videoDescription\n" +
+                    "Callbacks: ${frameCallbacks.get()} / Frames: $frames / Draws: $draws\n" +
+                    "${if (active) timeline.phase.name else "Waiting for decoder frame"}" +
+                    if (pollingFrames) " / polling fallback" else ""
+            post { if (!released) GeneralPrefs.toposcanPlaybackStatus = status }
         }
 
         private fun copySource(video: Boolean) {
@@ -624,10 +700,15 @@ class ToposcanView(
         private fun fail(e: Exception) {
             failed = true
             Timber.e(e, "Toposcan renderer failed")
-            if (hdrMode) {
-                post { bypassUnsupportedContent(e.message ?: "HDR graphics initialization failed") }
-            } else {
-                post { if (!released) onFailure?.invoke() }
+            post {
+                if (!released) {
+                    GeneralPrefs.toposcanPlaybackStatus = "Renderer failed: ${e.message}\n${GeneralPrefs.toposcanPlaybackStatus}"
+                    if (hdrMode) {
+                        bypassUnsupportedContent(e.message ?: "HDR graphics initialization failed")
+                    } else {
+                        onFailure?.invoke()
+                    }
+                }
             }
         }
 

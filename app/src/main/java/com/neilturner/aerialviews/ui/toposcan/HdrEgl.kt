@@ -7,9 +7,10 @@ import javax.microedition.khronos.egl.EGLContext
 import javax.microedition.khronos.egl.EGLDisplay
 import javax.microedition.khronos.egl.EGLSurface
 
-/** Config/context/window must all agree on 10-bit PQ. Failure never masquerades as HDR. */
-class HdrEgl :
-    GLSurfaceView.EGLConfigChooser,
+/** Config/context/window must agree on 10-bit output and its actual transfer function. */
+class HdrEgl(
+    private val output: HdrOutput = HdrOutput.HDR10,
+) : GLSurfaceView.EGLConfigChooser,
     GLSurfaceView.EGLContextFactory,
     GLSurfaceView.EGLWindowSurfaceFactory {
     @Volatile
@@ -97,20 +98,20 @@ class HdrEgl :
         if (ready) {
             val surface =
                 try {
-                    egl.eglCreateWindowSurface(display, config, nativeWindow, intArrayOf(0x309D, 0x3340, EGL10.EGL_NONE))
+                    egl.eglCreateWindowSurface(display, config, nativeWindow, intArrayOf(0x309D, output.eglColourSpace, EGL10.EGL_NONE))
                 } catch (_: IllegalArgumentException) {
                     EGL10.EGL_NO_SURFACE
                 }
             if (surface != EGL10.EGL_NO_SURFACE) {
                 val colour = IntArray(1)
-                if (!egl.eglQuerySurface(display, surface, 0x309D, colour) || colour[0] != 0x3340) {
-                    failure = "EGL surface did not confirm BT.2020/PQ output"
+                if (!egl.eglQuerySurface(display, surface, 0x309D, colour) || colour[0] != output.eglColourSpace) {
+                    failure = "EGL surface did not confirm ${output.label} output"
                     egl.eglGetError()
                     ready = false
                 }
                 return surface
             }
-            failure = "BT.2020/PQ window surface failed: ${egl.eglGetError()}"
+            failure = "${output.label} window surface failed: ${egl.eglGetError()}"
             ready = false
         }
         return try {

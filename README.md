@@ -3,8 +3,8 @@
 An experimental fork of Aerial Views with scan-band reveals and a trailing video-freeze boundary, inspired by Ryuichi Sakamoto and Shiro Takatani's installation. This is an independent implementation, not the original installation software or footage.
 
 - [Download this fork's APKs](https://github.com/i1bro/googletv-async-immersion/releases). Choose **release** for normal use; **debug** is for troubleshooting.
-- [Setup, HDR10 requirements, controls and safety checks](TOPOSCAN.md).
-- Up to 4K SDR/HDR10 processing with native clock/date overlays. HDR effects require Android 13+ and compatible drivers; Valerion hardware validation is still pending.
+- [Setup, HDR requirements, controls and safety checks](TOPOSCAN.md).
+- Up to 4K SDR/HDR processing with native clock/date overlays. HDR10/PQ output requires Android 13+; experimental live HLG output is available on Android 12+ with compatible display/drivers. Valerion hardware validation is still pending.
 - The release app has its own package ID, `com.i1bro.googletv.asyncimmersion`, and installs alongside Aerial Views. Debug uses the `.debug` suffix. Both fork builds exclude Firebase SDKs.
 
 ## Upstream Aerial Views

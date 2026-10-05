@@ -90,6 +90,7 @@ class HdrDevicePlaybackTest {
             while (error.get() == null && !revealed() && System.currentTimeMillis() < deadline) Thread.sleep(50)
             assertTrue(error.get() ?: "HDR decoder/effect did not advance", error.get() == null && revealed())
             assertTrue(GeneralPrefs.toposcanHdrStatus.contains("RGB10_A2"))
+            assertTrue(GeneralPrefs.toposcanHdrStatus.contains(checkNotNull(support.output).label))
         } finally {
             instrumentation.runOnMainSync {
                 if (::player.isInitialized) player.release()

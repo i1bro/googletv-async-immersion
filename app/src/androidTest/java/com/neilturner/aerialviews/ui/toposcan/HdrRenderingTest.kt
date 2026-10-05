@@ -21,6 +21,10 @@ import org.junit.runner.RunWith
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
+import kotlin.math.ln
+import kotlin.math.pow
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /** Offscreen pixel tests, not a claim that the emulator's display can emit HDR. */
 @RunWith(AndroidJUnit4::class)
@@ -28,7 +32,12 @@ import kotlin.math.abs
 @SuppressLint("RestrictedApi")
 class HdrRenderingTest {
     @Test
-    fun pqRoundTripRetainsTenBitGradationsAndHighlightsThroughEffect() =
+    fun pqRoundTripRetainsTenBitGradationsAndHighlightsThroughEffect() = pqRamp(HdrOutput.HDR10)
+
+    @Test
+    fun pqToHlgRetainsGradationsAndCompressesHighlightsThroughEffect() = pqRamp(HdrOutput.HLG)
+
+    private fun pqRamp(mode: HdrOutput) =
         withGl {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val width = 1024
@@ -57,7 +66,7 @@ class HdrRenderingTest {
                     WORKING_COLOR_SPACE_LINEAR,
                     VideoFrameProcessor.INPUT_TYPE_TEXTURE_ID,
                 )
-            val output = HdrFramePipeline(context)
+            val output = HdrFramePipeline(context, mode)
             try {
                 decoder.configure(width, 1)
                 focus(linear, width, 1)
@@ -76,13 +85,49 @@ class HdrRenderingTest {
                 GLES20.glReadPixels(0, 0, width, 1, GLES20.GL_RGBA, GLES30.GL_UNSIGNED_INT_2_10_10_10_REV, actual)
                 GlUtil.checkGlError()
                 val red = (0 until width).map { actual[it] and 1023 }
-                assertTrue("Output was reduced to 8-bit steps", red.toSet().size > 900)
-                assertTrue("PQ round trip changed luminance", (32 until width).all { abs(red[it] - it) <= 2 })
+                if (mode == HdrOutput.HDR10) {
+                    assertTrue("Output was reduced to 8-bit steps", red.toSet().size > 900)
+                    assertTrue("PQ round trip changed luminance", (32 until width).all { abs(red[it] - it) <= 2 })
+                } else {
+                    assertTrue("HLG output was reduced to 8-bit steps", red.toSet().size > 600)
+                    assertTrue("HLG ramp must be monotonic", red.zipWithNext().all { (a, b) -> b >= a })
+                    assertTrue("PQ to HLG luminance mismatch", (32 until width).all { abs(red[it] - hlgReference(it)) <= 3 })
+                    assertTrue("1000/4000/10000-nit highlights must remain distinct", red[769] < red[923] && red[923] < red[1023])
+                    assertEquals(0, red.first())
+                }
             } finally {
                 decoder.release()
                 output.release()
             }
         }
+
+    @Test
+    fun hlgOutputKeepsSaturatedHighlightsFiniteAndInGamut() =
+        withGl {
+            val source = GlUtil.createTexture(4, 1, true)
+            val encoded = GlUtil.createTexture(4, 1, true)
+            val output = HdrFramePipeline(InstrumentationRegistry.getInstrumentation().targetContext, HdrOutput.HLG)
+            try {
+                for (rgb in listOf(floatArrayOf(10f, 0f, 0f, 1f), floatArrayOf(0f, 10f, 0f, 1f), floatArrayOf(0f, 0f, 10f, 1f))) {
+                    upload(source, 4, rgb)
+                    focus(encoded, 4, 1)
+                    output.present(source)
+                    assertTrue("HLG gamut mapping produced invalid values", floats(4).all { it.isFinite() && it in 0f..1.001f })
+                }
+            } finally {
+                output.release()
+            }
+        }
+
+    // Independent double-precision reference: ST2084 EOTF -> HDR shoulder -> inverse HLG OOTF -> OETF.
+    private fun hlgReference(code: Int): Int {
+        val e = (code / 1023.0).pow(1.0 / (2523.0 / 32.0))
+        val light = (maxOf(e - 3424.0 / 4096.0, 0.0) / (2413.0 / 128.0 - 2392.0 / 128.0 * e)).pow(1.0 / (2610.0 / 16384.0)) * 10
+        val mapped = if (light <= 0.5) light else 1.0 - 0.25 / light
+        val scene = mapped.pow(1.0 / 1.2)
+        val hlg = if (scene <= 1.0 / 12.0) sqrt(3 * scene) else 0.17883277 * ln(12 * scene - 0.28466892) + 0.55991073
+        return (hlg * 1023).roundToInt()
+    }
 
     @Test
     fun colourFieldMixesLinearHdrLightWithoutClipping() =

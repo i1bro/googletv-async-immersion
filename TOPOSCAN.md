@@ -24,7 +24,9 @@ The initial `0.1.0-alpha.1` GitHub release is marked pre-release because real-pr
 Open **Settings > Toposcan**. Available controls:
 
 - Enable/disable Toposcan. Disabling it restores the original media player.
-- HDR10 effect (default on) and HDR10 status, including the last playback result or rejection reason.
+- HDR effect (default on) and HDR status, including the last playback result or rejection reason. An existing installation keeps its toggle setting.
+- HDR output: Auto (default), HDR10, or HLG (experimental). Auto prefers supported PQ output on Android 13+, otherwise tries supported HLG output on Android 12+. Explicit choices never silently select a different HDR output.
+- Playback status: last render size, GPU, video format, frame callbacks, latched frames, draw count and scan phase. Stored locally without media URLs.
 - Band height: 1-12 pixels referenced to a 1080-line screen, default 3.
 - Scan duration: 8-96 seconds, default 32.
 - Trailing freeze delay: 0-16 seconds, default 4.
@@ -38,6 +40,14 @@ Settings are persisted and read when the screensaver next starts. Video speed, s
 
 First use the app's **Test screensaver settings** command. Only after playback works should you make it the default screensaver.
 
+### Black Picture With A Visible Clock
+
+First compare with **Toposcan mode** disabled. If normal playback works, the issue is in the effect's graphics/decoder-surface path, not necessarily the source or Android version. Turning off **HDR effect** does not change source quality or convert an HDR file to SDR.
+
+Starting in `0.1.0-alpha.2`, effect startup waits for an actual latched texture frame and video metadata, independent of the decoder's first-frame notification. If frame-available callbacks stop arriving, the renderer checks for new texture timestamps and can switch to polling; duplicate timestamps still do not advance the scan. This addresses notification/startup failures, not every cause of black output.
+
+After a 10-20 second preview, return to **Toposcan > Playback status** and record its text. Zero frame callbacks/latched frames indicates that frames have not reached the effect; positive frame and draw counts with a black picture needs further source-texture/compositor investigation. The status also preserves graphics initialization errors. PQ output still requires Android 13+; alpha.3 adds a capability-gated HLG output alternative for Android 12+. SDR is supported on Android 12. Emulator playback alone does not verify Valerion's GPU driver.
+
 ## Valerion Plus: Quality And Safety
 
 Valerion's [Plus/Plus 2 product page](https://www.valerion.com/product/valerion-streammaster-plus2-plus-4k-rgb-triple-laser-projector) lists 4K UHD, Google TV, MT9618 and 4 GB RAM. The current page calls these models StreamMaster; some other Valerion pages use VisionMaster. Marketing specifications do not establish that a custom GPU effect will run smoothly on a particular firmware.
@@ -46,9 +56,19 @@ The effect supports **up to 3840x2160 SDR and HDR10 processing**, not just 4K de
 
 HDR10 now has a separate path: decoder YUV -> Media3's BT.2020/PQ-to-linear shader -> FP16 live/history/composite buffers -> Media3's linear-to-PQ shader -> RGB10_A2 EGL window surface tagged BT.2020/PQ. Colour-field blends use linear light. The effect shader uses high-precision samplers and does not clamp highlights to SDR white. Source static mastering/CLL metadata is forwarded when the optional EGL metadata extensions are present; missing values are cleared between clips. No HDR-to-SDR tone mapping is requested by this path.
 
-**Compatibility is not established merely by the projector's HDR logo.** This implementation requires Android 13 / API 33 or newer, reported display HDR10 support, GLES 3, a 10-bit EGL config, `EGL_EXT_gl_colorspace_bt2020_pq`, `GL_EXT_YUV_target`, and renderable RGBA16F textures. Android 12 or older does not qualify for this OpenGL PQ display path, even if native HDR video works. This matches the platform restriction in [Media3 GlUtil](https://github.com/androidx/media/blob/1.11.1/libraries/common/src/main/java/androidx/media3/common/util/GlUtil.java). Actual PQ output, colour accuracy and sustained performance still require verification on the Valerion firmware; the emulator does not establish those.
+**Compatibility is not established merely by the projector's HDR logo.** PQ output requires Android 13 / API 33 or newer, reported display HDR10 support and `EGL_EXT_gl_colorspace_bt2020_pq`. The experimental HLG output instead requires Android 12 / API 31 or newer, reported display HLG support and `EGL_EXT_gl_colorspace_bt2020_hlg`. Both require GLES 3, a 10-bit EGL config, `GL_EXT_YUV_target` and renderable RGBA16F textures. The EGL surface must confirm the requested colour-space tag. Missing capabilities or renderer errors restore native playback, without pretending an SDR surface is HDR. The PQ version restriction follows [Media3 GlUtil](https://github.com/androidx/media/blob/1.11.1/libraries/common/src/main/java/androidx/media3/common/util/GlUtil.java). Actual HDR presentation, colour accuracy and sustained performance still require verification on the Valerion firmware; the emulator does not establish those.
 
-The HDR10 status preference reports display/EGL prerequisites; a successful playback result reports actual buffer size, RGB10_A2 output and FP16 processing. Failure displays a reason and restores native video for that session, without permanently disabling the effect. There is no silent conversion of HDR files into SDR effects. HLG, Dolby Vision, unsupported BT.2020 transfers, or unavailable HDR hardware use that native fallback. HDR10+ can use its PQ base picture; dynamic HDR10+ metadata is not preserved. Unlabelled HDR files cannot be identified reliably.
+### Experimental Live HLG Output (alpha.3)
+
+For Android 12, enable **HDR effect**, select **HDR output > Auto** (or **HLG (experimental)**), and preview a known HDR10 / BT.2020 PQ clip. Dolby Vision and HLG *input* clips still use the native player; HLG here describes the effect's output. Settings and source quality are independent. A disabled HDR toggle from alpha.1/alpha.2 remains disabled after updating.
+
+The live path is HDR10 decoder YUV -> Media3 PQ decoding -> FP16 effect -> HLG output shader -> RGB10_A2 EGL surface tagged BT.2020/HLG. No pre-rendering, encoder, network service, CPU frame readback or additional full-size intermediate texture is introduced. Rendering remains up to 3840x2160, and overlays stay separate.
+
+HLG conversion uses a 1000-nit reference display and the BT.2100 inverse OOTF (gamma 1.2) followed by the HLG OETF. A smooth, hue-preserving highlight shoulder above 500 nits maps brighter PQ values into HLG headroom rather than clipping everything above 1000 nits; very saturated out-of-gamut colours are compressed towards equal-luminance grey. This is HDR-to-HDR adaptation, not bit-exact HDR10 passthrough or SDR tone mapping. Brightness/highlight rendering can differ from native PQ playback. PQ mastering metadata is not attached to the HLG surface. The HLG transfer and EGL tagging are specified in [Khronos EXT_gl_colorspace_bt2020](https://registry.khronos.org/EGL/extensions/EXT/EGL_EXT_gl_colorspace_bt2020_linear.txt).
+
+The settings show the available output path and missing prerequisite; **Playback status** records the actual selected path, buffer size and frame counters. Android 12 is no longer rejected solely because PQ output is unavailable. If the driver lacks HLG EGL output or raw HDR sampling, this release cannot make it available. It does not modify firmware or force a system display mode.
+
+The HDR status preference reports display/EGL prerequisites; a successful playback result reports actual buffer size, RGB10_A2 output and FP16 processing. Failure displays a reason and restores native video for that session, without permanently disabling the effect. There is no silent conversion of HDR files into SDR effects. HLG input, Dolby Vision, unsupported BT.2020 transfers, or unavailable HDR hardware use that native fallback. HDR10+ can use its PQ base picture; dynamic HDR10+ metadata is not preserved. Unlabelled HDR files cannot be identified reliably.
 
 Switching between SDR and HDR recreates the surface and starts a new colour field, so the previous image is not carried across that format boundary and a brief black interval can occur. Consecutive HDR10 clips retain the freeze/band transitions. Photos still use the SDR path; wide-gamut/Ultra HDR photo output is not implemented. Refresh-rate switching is suppressed while the Toposcan preference is enabled. Native Android clock/date overlays remain separate from the effect.
 
@@ -60,7 +80,7 @@ Recommended staged check:
 
 1. Keep the original Ambient Mode selected. Do not run the `settings put` command below yet. Record the current component and power timeout values, optionally using the read-only preflight script.
 2. Install the separate **Async Immersion** release package. Do not use `adb install -g`, root, bootloader unlock, firmware flashing or permission-grant commands. Streaming does not require granting access to all local media; a USB/local library does require the appropriate media access.
-3. First use **Toposcan > Preview (2 minutes)** with a local 4K SDR clip. Then repeat with a known HDR10 clip and inspect HDR10 status. Check image detail, colours, band movement, clock, Home/Back exit, and return to normal apps. Compare the projector's signal information and the image with ordinary playback of the same HDR10 file. The timeout runs on the app's UI thread; it is not an independent hardware watchdog.
+3. First use **Toposcan > Preview (2 minutes)** with a local 4K SDR clip. Then repeat with a known HDR10 clip and inspect HDR status. Check image detail, colours, band movement, clock, Home/Back exit, and return to normal apps. Compare the projector's signal information and the image with ordinary playback of the same HDR10 file. The timeout runs on the app's UI thread; it is not an independent hardware watchdog.
 4. If stable, run a supervised 10-15 minute normal preview with unobstructed ventilation and unchanged manufacturer picture/laser settings. Stop if there are warnings, unexpected shutdowns, unusual heat/noise or persistent unresponsiveness. A few dropped frames indicate a performance problem, not proof of hardware damage.
 5. Only then select the new screensaver. Check remote wake, standby/power-off, and the configured sleep timeout. Revert the component before uninstalling if you have selected this screensaver. Do not leave the projector running unattended until these checks pass. A screensaver still uses the light source; it does not replace standby.
 
@@ -125,7 +145,7 @@ Prototype differences from normal Aerial Views:
 
 - Toposcan owns per-item duration. Normal photo/video duration limits and their progress indicators do not represent its full scan cycle. Short videos loop until the freeze finishes.
 - Full-screen centre crop is used. Photo blur/background and portrait video rotation options are not applied to the processed image. Animated photo formats are treated as a still.
-- HDR10 processing is capability-gated as described above. HLG, Dolby Vision and incompatible HDR devices use the native-player fallback. Tunnelling is disabled while the mode is enabled.
+- HDR10 processing is capability-gated as described above, with PQ or experimental HLG output. HLG input, Dolby Vision and incompatible HDR devices use the native-player fallback. Tunnelling is disabled while the mode is enabled.
 - Weather UI remains present, but a local build needs its own OpenWeather key in the ignored `secrets.properties` (`openWeatherDebug=...`). No private upstream key is supplied, and live weather has not been verified.
 - SDR graphics initialization/rendering failure turns off Toposcan and restores the standard player. HDR graphics failure reports its reason and restores native playback for that session.
 - Native Google Ambient Mode widgets, AI art and its Google-account integrations are not part of this app.
@@ -141,6 +161,10 @@ Prototype differences from normal Aerial Views:
 ```
 
 The added JVM tests cover stalled/duplicate frames, pause, loop timestamps, zero freeze delay, direction changes, trailing completion, render-size caps, HDR colour policy, HDR capability gates and static-metadata units. Instrumented tests run the real ScreenController/ExoPlayer/GLSurfaceView with a generated H.264 fixture and a local test feed, check frozen versus live pixel changes, pause stability, black pixels during effect blackout, clock presence, video-photo-video transitions, one-pixel photo detail in a 3840x2160 buffer, native-surface fallback and timed preview exit without changing the default screensaver. Fixtures are test-only and are not bundled in the app APK.
+
+`VideoFrameDeliveryTest` deliberately removes SurfaceTexture frame callbacks and does not register a decoder first-frame listener. It checks that polling still starts playback, advances the reveal and produces nonblack pixels. JVM startup-gate tests cover both metadata/frame arrival orders and per-clip reset.
+
+HDR output tests cover Auto/forced selection, Android 12 HLG prerequisites, rejection of mismatched EGL tags, PQ round-trip precision, PQ-to-HLG 10-bit gradients against an independent double-precision reference, distinct 1000/4000/10000-nit highlights and saturated-colour gamut limits. Offscreen tests verify processing, not physical HDR presentation. The physical HDR playback test remains capability-gated.
 
 `HdrRenderingTest` runs the production effect shader and Media3 colour shaders in an offscreen GLES 3 context. It checks PQ -> FP16 -> effect -> 10-bit PQ round-trip accuracy, more than 900 distinct code values, retained highlights up to 10,000 nits in signal space, and linear-light field blending. It does not assert that the emulator's screen emits HDR.
 
