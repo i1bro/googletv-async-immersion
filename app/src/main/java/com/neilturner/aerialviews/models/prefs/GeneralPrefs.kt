@@ -33,6 +33,7 @@ object GeneralPrefs : KotprefModel() {
     var toposcanHdrOutput by stringPref("auto", "toposcan_hdr_output")
     var toposcanHdrStatus by stringPref("", "toposcan_hdr_status")
     var toposcanPlaybackStatus by stringPref("", "toposcan_playback_status")
+    var toposcanGraphicsStatus by stringPref("", "toposcan_graphics_status")
 
     // Overlays - Top
     var slotTopLeft1 by nullableEnumValuePref(OverlayType.EMPTY, "slot_top_left1")

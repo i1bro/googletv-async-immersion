@@ -6,6 +6,8 @@
         app:entries="@array/toposcan_hdr_output_entries" app:entryValues="@array/toposcan_hdr_output_values" app:useSimpleSummaryProvider="true" />
     <Preference app:key="toposcan_hdr_diagnostics" app:title="@string/toposcan_hdr_status" app:selectable="false" />
     <Preference app:key="toposcan_playback_diagnostics" app:title="@string/toposcan_playback_status" app:selectable="false" />
+    <Preference app:key="toposcan_graphics_test" app:title="@string/toposcan_graphics_test" />
+    <Preference app:key="toposcan_graphics_status" app:title="@string/toposcan_graphics_result" app:selectable="false" />
     <ListPreference app:key="toposcan_band_height" app:defaultValue="3" app:title="@string/toposcan_band"
         app:entries="@array/toposcan_band_values" app:entryValues="@array/toposcan_band_values" app:useSimpleSummaryProvider="true" />
     <ListPreference app:key="toposcan_scan" app:defaultValue="32" app:title="@string/toposcan_scan"

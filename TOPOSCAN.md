@@ -48,6 +48,18 @@ Starting in `0.1.0-alpha.2`, effect startup waits for an actual latched texture 
 
 After a 10-20 second preview, return to **Toposcan > Playback status** and record its text. Zero frame callbacks/latched frames indicates that frames have not reached the effect; positive frame and draw counts with a black picture needs further source-texture/compositor investigation. The status also preserves graphics initialization errors. PQ output still requires Android 13+; alpha.3 adds a capability-gated HLG output alternative for Android 12+. SDR is supported on Android 12. Emulator playback alone does not verify Valerion's GPU driver.
 
+### 4K Graphics Test (alpha.4)
+
+Open **Settings > Toposcan > 4K graphics test**. No ADB, internet access or change to the default screensaver is needed. At each of six stages, select the button matching the picture: red/green/blue/white bars, black, or distorted. Send a photo of the final report, also stored under **4K test result**. Back/Home exits, and the activity closes after two minutes. The timeout is on the UI thread, not an independent watchdog.
+
+The test uses actual 1920x1080 and 3840x2160 SDR buffers independently of the Android UI resolution. It never changes the playback width/HDR preferences or overwrites Playback status. Unsupported GPU dimensions are reported as skipped, not silently downscaled. Each resolution runs:
+
+- DIRECT: scissored colour clears to the EGL window, without the effect shader.
+- IMAGE: a generated pattern through the production photo copy, frozen-history and previous-image buffers, and the production scene shader.
+- EXTERNAL: the same pattern submitted through a full-resolution Surface/SurfaceTexture and the production external-texture shader, then the same effect buffers. This is synthetic RGB input, not a hardware-decoded HEVC frame.
+
+One-shot `glReadPixels` probes compare four known colours at three heights in each relevant buffer and the EGL window before swap. There is no readback in ordinary playback. `Live` or `Frozen` failure points to the corresponding graphics stage; successful intermediate probes with a failing `Window` narrow it to the final draw. All probes passing but a visually black image points towards surface presentation/composition, which GPU readback alone cannot verify. A passing synthetic test does **not** clear the hardware video decoder, YUV sampling, concurrent decoder memory pressure, HDR, or sustained performance. It is a diagnostic, not a 4K compatibility fix.
+
 ## Valerion Plus: Quality And Safety
 
 Valerion's [Plus/Plus 2 product page](https://www.valerion.com/product/valerion-streammaster-plus2-plus-4k-rgb-triple-laser-projector) lists 4K UHD, Google TV, MT9618 and 4 GB RAM. The current page calls these models StreamMaster; some other Valerion pages use VisionMaster. Marketing specifications do not establish that a custom GPU effect will run smoothly on a particular firmware.
@@ -163,6 +175,8 @@ Prototype differences from normal Aerial Views:
 The added JVM tests cover stalled/duplicate frames, pause, loop timestamps, zero freeze delay, direction changes, trailing completion, render-size caps, HDR colour policy, HDR capability gates and static-metadata units. Instrumented tests run the real ScreenController/ExoPlayer/GLSurfaceView with a generated H.264 fixture and a local test feed, check frozen versus live pixel changes, pause stability, black pixels during effect blackout, clock presence, video-photo-video transitions, one-pixel photo detail in a 3840x2160 buffer, native-surface fallback and timed preview exit without changing the default screensaver. Fixtures are test-only and are not bundled in the app APK.
 
 `VideoFrameDeliveryTest` deliberately removes SurfaceTexture frame callbacks and does not register a decoder first-frame listener. It checks that polling still starts playback, advances the reveal and produces nonblack pixels. JVM startup-gate tests cover both metadata/frame arrival orders and per-clip reset.
+
+`GraphicsDiagnosticActivityTest` exercises all six diagnostic stages, verifies their submitted surface pixels with PixelCopy, checks both real buffer sizes and unchanged playback preferences/status, and verifies that early exit leaves an unconfirmed result. JVM tests reject black, cropped and incorrectly ordered colour samples.
 
 HDR output tests cover Auto/forced selection, Android 12 HLG prerequisites, rejection of mismatched EGL tags, PQ round-trip precision, PQ-to-HLG 10-bit gradients against an independent double-precision reference, distinct 1000/4000/10000-nit highlights and saturated-colour gamut limits. Offscreen tests verify processing, not physical HDR presentation. The physical HDR playback test remains capability-gated.
 

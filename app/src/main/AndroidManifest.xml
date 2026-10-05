@@ -72,6 +72,11 @@
         tools:ignore="DataExtractionRules,MediaCapabilities"
         >
 
+        <activity
+            android:name=".ui.toposcan.GraphicsDiagnosticActivity"
+            android:configChanges="orientation|keyboardHidden|screenSize"
+            android:exported="false" />
+
         <!-- Default launch point -->
         <activity
             android:name=".ui.MainActivity"

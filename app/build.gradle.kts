@@ -132,8 +132,8 @@ android {
         create("immersion") {
             dimension = "version"
             applicationId = "com.i1bro.googletv.asyncimmersion"
-            versionCode = 3
-            versionName = "0.1.0-alpha.3"
+            versionCode = 4
+            versionName = "0.1.0-alpha.4"
             signingConfig = signingConfigs.getByName("immersion")
             configure<FirebasePerfExtension> {
                 setInstrumentationEnabled(false)

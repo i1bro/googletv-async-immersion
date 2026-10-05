@@ -8,6 +8,7 @@ import com.neilturner.aerialviews.R
 import com.neilturner.aerialviews.models.prefs.GeneralPrefs
 import com.neilturner.aerialviews.ui.controls.MenuStateFragment
 import com.neilturner.aerialviews.ui.screensaver.TestActivity
+import com.neilturner.aerialviews.ui.toposcan.GraphicsDiagnosticActivity
 import com.neilturner.aerialviews.ui.toposcan.HdrSupport
 
 class ToposcanFragment : MenuStateFragment() {
@@ -17,6 +18,8 @@ class ToposcanFragment : MenuStateFragment() {
         updateHdrStatus(GeneralPrefs.toposcanHdrOutput)
         findPreference<Preference>("toposcan_playback_diagnostics")?.summary =
             GeneralPrefs.toposcanPlaybackStatus.ifBlank { getString(R.string.toposcan_not_started) }
+        findPreference<Preference>("toposcan_graphics_status")?.summary =
+            GeneralPrefs.toposcanGraphicsStatus.ifBlank { getString(R.string.toposcan_not_started) }
     }
 
     @androidx.annotation.OptIn(UnstableApi::class)
@@ -31,6 +34,10 @@ class ToposcanFragment : MenuStateFragment() {
         rootKey: String?,
     ) {
         setPreferencesFromResource(R.xml.settings_toposcan, rootKey)
+        findPreference<Preference>("toposcan_graphics_test")?.setOnPreferenceClickListener {
+            startActivity(Intent(requireContext(), GraphicsDiagnosticActivity::class.java))
+            true
+        }
         findPreference<Preference>("toposcan_hdr_output")?.setOnPreferenceChangeListener { _, value ->
             updateHdrStatus(value.toString())
             true

@@ -97,6 +97,7 @@ import javax.microedition.khronos.opengles.GL10
 class ToposcanView(
     context: Context,
     val hdrMode: Boolean = false,
+    private val graphicsDiagnostic: GraphicsDiagnostic? = null,
 ) : GLSurfaceView(context),
     Choreographer.FrameCallback {
     var onSurfaceReady: ((Surface) -> Unit)? = null
@@ -125,6 +126,7 @@ class ToposcanView(
     private val hdrOutput = hdrSupport.output ?: HdrOutput.HDR10
     private val hdrEgl = if (hdrMode) HdrEgl(hdrOutput) else null
     private var maxTextureSize = 2048
+    private var graphicsLimitReady = false
 
     @Volatile
     var renderSize = RenderSize(1920, 1080)
@@ -142,7 +144,10 @@ class ToposcanView(
     private val renderer = ScanRenderer()
 
     init {
-        GeneralPrefs.toposcanPlaybackStatus = "Starting ${if (hdrMode) hdrOutput.label else "SDR"}; waiting for EGL surface"
+        require(graphicsDiagnostic == null || !hdrMode) { "Graphics diagnostics require SDR" }
+        if (graphicsDiagnostic == null) {
+            GeneralPrefs.toposcanPlaybackStatus = "Starting ${if (hdrMode) hdrOutput.label else "SDR"}; waiting for EGL surface"
+        }
         if (hdrEgl != null) {
             holder.setFormat(PixelFormat.RGBA_1010102)
             setEGLConfigChooser(hdrEgl)
@@ -170,6 +175,16 @@ class ToposcanView(
 
     private fun updateBufferSize() {
         if (released || width <= 0 || height <= 0) return
+        if (graphicsDiagnostic != null) {
+            if (!graphicsLimitReady) return
+            val size = graphicsDiagnostic.size
+            if (maxOf(size.width, size.height) > maxTextureSize) {
+                graphicsDiagnostic.onResult(GraphicsDiagnostic.Result("SKIPPED: GPU size limit $maxTextureSize"))
+                return
+            }
+            holder.setFixedSize(size.width, size.height)
+            return
+        }
         val mode = display?.mode?.takeIf { DeviceHelper.isTV(context) }
         val size = RenderSize.choose(mode?.physicalWidth ?: width, mode?.physicalHeight ?: height, settings.width, maxTextureSize)
         holder.setFixedSize(size.width, size.height)
@@ -310,6 +325,8 @@ class ToposcanView(
         private var lastVideoTimestamp = Long.MIN_VALUE
         private var failed = false
         private var pendingImage: Bitmap? = null
+        private var diagnosticPrepared = false
+        private var diagnosticReported = false
         private val transform = FloatArray(16)
         private val vertices =
             ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
@@ -339,6 +356,7 @@ class ToposcanView(
                 maximum = minOf(maximum, limit[0], limit[1])
                 post {
                     maxTextureSize = maximum
+                    graphicsLimitReady = true
                     updateBufferSize()
                 }
                 active = false
@@ -387,6 +405,8 @@ class ToposcanView(
         ) {
             width = w
             height = h
+            diagnosticPrepared = false
+            diagnosticReported = false
             if (failed) return
             try {
                 for (id in if (hdrMode) intArrayOf(live, history, previous, composite) else intArrayOf(live, history, previous)) {
@@ -517,6 +537,10 @@ class ToposcanView(
                         }
                     }
                 }
+                if (graphicsDiagnostic != null) {
+                    drawDiagnostic(graphicsDiagnostic)
+                    return
+                }
                 reportStatus()
                 if (!active || blackout) {
                     glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -572,6 +596,7 @@ class ToposcanView(
         }
 
         private fun reportStatus(force: Boolean = false) {
+            if (graphicsDiagnostic != null) return
             val now = System.nanoTime()
             if (!force && now - lastStatus < 1_000_000_000L) return
             lastStatus = now
@@ -582,6 +607,63 @@ class ToposcanView(
                     "${if (active) timeline.phase.name else "Waiting for decoder frame"}" +
                     if (pollingFrames) " / polling fallback" else ""
             post { if (!released) GeneralPrefs.toposcanPlaybackStatus = status }
+        }
+
+        private fun drawDiagnostic(test: GraphicsDiagnostic) {
+            if (RenderSize(width, height) != test.size) return
+            if (!diagnosticPrepared) {
+                diagnosticPrepared = true
+                when (test.input) {
+                    GraphicsDiagnostic.Input.DIRECT -> {
+                        Unit
+                    }
+
+                    GraphicsDiagnostic.Input.IMAGE -> {
+                        beginImage(test.bitmap())
+                    }
+
+                    GraphicsDiagnostic.Input.EXTERNAL -> {
+                        awaitVideoFrame()
+                        surfaceTexture?.setDefaultBufferSize(width, height)
+                        val producer = checkNotNull(surface)
+                        val canvas = producer.lockCanvas(null)
+                        try {
+                            test.paint(canvas)
+                        } finally {
+                            producer.unlockCanvasAndPost(canvas)
+                        }
+                    }
+                }
+            }
+            if (failed || (test.input == GraphicsDiagnostic.Input.EXTERNAL && !hasVideoFrame)) return
+            val probes = mutableListOf<String>()
+            if (!diagnosticReported && test.input != GraphicsDiagnostic.Input.DIRECT) {
+                if (test.input == GraphicsDiagnostic.Input.EXTERNAL) {
+                    sourceAspect = width.toFloat() / height
+                    copySource(true)
+                }
+                target(live)
+                probes += "Live: ${test.probe()}"
+                capture(1f)
+                target(history)
+                probes += "Frozen: ${test.probe()}"
+                target(previous)
+                drawScene(ScanPhase.REVEAL, 1f, 1f, live)
+                probes += "Previous: ${test.probe()}"
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+            glViewport(0, 0, width, height)
+            if (test.input == GraphicsDiagnostic.Input.DIRECT) {
+                test.clearPattern()
+            } else {
+                drawScene(ScanPhase.REVEAL, 1f, 1f)
+            }
+            if (!diagnosticReported) {
+                probes += "Window: ${test.probe()}"
+                diagnosticReported = true
+                val report = GraphicsDiagnostic.Result(probes.joinToString(" / "), gpu)
+                post { if (!released) test.onResult(report) }
+            }
         }
 
         private fun copySource(video: Boolean) {
@@ -702,6 +784,10 @@ class ToposcanView(
             Timber.e(e, "Toposcan renderer failed")
             post {
                 if (!released) {
+                    if (graphicsDiagnostic != null) {
+                        graphicsDiagnostic.onResult(GraphicsDiagnostic.Result("Renderer failed: ${e.message}", gpu))
+                        return@post
+                    }
                     GeneralPrefs.toposcanPlaybackStatus = "Renderer failed: ${e.message}\n${GeneralPrefs.toposcanPlaybackStatus}"
                     if (hdrMode) {
                         bypassUnsupportedContent(e.message ?: "HDR graphics initialization failed")
