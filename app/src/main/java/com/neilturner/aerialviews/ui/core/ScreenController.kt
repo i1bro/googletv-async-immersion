@@ -54,6 +54,7 @@ import com.neilturner.aerialviews.ui.overlays.state.MessageOverlayState
 import com.neilturner.aerialviews.ui.overlays.state.OverlayEventBridge
 import com.neilturner.aerialviews.ui.overlays.state.OverlayStateStore
 import com.neilturner.aerialviews.ui.overlays.state.OverlayUiState
+import com.neilturner.aerialviews.ui.toposcan.ToposcanView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -113,6 +114,7 @@ class ScreenController(
     private val metadataJobs = mutableMapOf<OverlayType, Job>()
     private var currentMedia: AerialMedia? = null
     private val cacheRepository = PlaylistCacheRepository(context)
+    private var toposcan: ToposcanView? = null
     private var videoViewBinding: VideoViewBinding
     private val imageViewBinding: ImageViewBinding
     private val overlayViewBinding: OverlayViewBinding
@@ -166,7 +168,9 @@ class ScreenController(
         val initialVideoRoot = binding.videoView.root
         val videoParent = initialVideoRoot.parent as? ViewGroup
         val videoLayoutRes =
-            if (GeneralPrefs.useTextureViewForVideo) {
+            if (GeneralPrefs.toposcanEnabled) {
+                R.layout.video_view_toposcan
+            } else if (GeneralPrefs.useTextureViewForVideo) {
                 R.layout.video_view_texture
             } else {
                 R.layout.video_view
@@ -192,6 +196,10 @@ class ScreenController(
         imageViewBinding.root.setBackgroundColor(backgroundPhotos)
         imagePlayer = imageViewBinding.imagePlayer
         imagePlayer.setOnPlayerListener(this)
+
+        if (GeneralPrefs.toposcanEnabled) {
+            attachToposcan(hdr = false)
+        }
 
         brightnessView = binding.brightnessView
         progressBarView = binding.progressBar
@@ -430,6 +438,11 @@ class ScreenController(
     }
 
     private fun loadItem(media: AerialMedia) {
+        if (media.type == AerialMediaType.IMAGE && toposcan?.hdrMode == true) {
+            switchToposcanColourMode(false, media)
+            return
+        }
+        toposcan?.setPaused(true)
         // Reset pause state when loading new item
         isPaused = false
         pauseStartTime = 0
@@ -633,6 +646,27 @@ class ScreenController(
     private fun fadeOutCurrentItem() {
         if (!canSkip) return
         canSkip = false
+
+        if (toposcan != null) {
+            videoPlayer.stop()
+            imagePlayer.stop()
+            isPaused = false
+            pauseStartTime = 0
+            val skip = explicitSkip
+            val previous = previousItem
+            explicitSkip = false
+            previousItem = false
+            if (!blackOutMode) {
+                if (skip) {
+                    loadNextItem(previous)
+                } else if (loopUntilSkipped && currentMedia != null) {
+                    replayCurrentItem()
+                } else {
+                    loadNextItem()
+                }
+            }
+            return
+        }
 
         overlayHelper.findOverlay<MetadataOverlay>().forEach {
             it.isFadingOutMedia = true
@@ -850,6 +884,7 @@ class ScreenController(
         videoParent?.removeView(videoViewBinding.root)
         videoPlayer.release()
         imagePlayer.release()
+        toposcan?.release()
         ktorServer?.stop()
         nowPlayingService?.stop()
         weatherService?.stop()
@@ -888,6 +923,8 @@ class ScreenController(
      * blackout ineffective when the first item was still loading.
      */
     private fun enterBlackOutMode(source: BlackOutSource) {
+        toposcan?.setPaused(true)
+        toposcan?.setBlackout(true)
         blackOutMode = true
         blackOutSource = source
         sleepTimerJob?.cancel()
@@ -914,6 +951,7 @@ class ScreenController(
 
     private fun exitBlackOutMode() {
         blackOutMode = false
+        toposcan?.setBlackout(false)
         blackOutSource = BlackOutSource.NONE
         loadingView.setBackgroundColor(ColourHelper.colourFromString(GeneralPrefs.backgroundLoading))
         overlayView.visibility = View.VISIBLE
@@ -1037,6 +1075,7 @@ class ScreenController(
 
     private fun pauseMedia() {
         if (isPaused) return
+        toposcan?.setPaused(true)
 
         isPaused = true
         pauseStartTime = System.currentTimeMillis()
@@ -1059,6 +1098,7 @@ class ScreenController(
 
     private fun resumeMedia() {
         if (!isPaused) return
+        toposcan?.setPaused(false)
 
         isPaused = false
         val pauseDuration = System.currentTimeMillis() - pauseStartTime
@@ -1103,12 +1143,81 @@ class ScreenController(
         videoParent.removeView(oldRoot)
 
         val layoutRes =
-            if (GeneralPrefs.useTextureViewForVideo) R.layout.video_view_texture else R.layout.video_view
+            if (toposcan != null) {
+                R.layout.video_view_toposcan
+            } else if (!toposcanColourBypass && GeneralPrefs.useTextureViewForVideo) {
+                R.layout.video_view_texture
+            } else {
+                R.layout.video_view
+            }
         val replacement = LayoutInflater.from(context).inflate(layoutRes, videoParent, false)
         videoParent.addView(replacement, index)
         videoViewBinding = VideoViewBinding.bind(replacement)
         videoPlayer = videoViewBinding.videoPlayer
         videoPlayer.setOnPlayerListener(this)
+        toposcan?.let { effect ->
+            videoViewBinding.root.alpha = 0f
+            videoPlayer.toposcan = effect
+            effect.videoSurface?.let { videoPlayer.setToposcanSurface(it) }
+        }
+    }
+
+    private var toposcanColourBypass = false
+
+    private fun attachToposcan(hdr: Boolean) {
+        val effect = ToposcanView(context, hdr)
+        toposcan = effect
+        (view as ViewGroup).addView(effect, (view as ViewGroup).indexOfChild(overlayView))
+        effect.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        videoViewBinding.root.alpha = 0f
+        imageViewBinding.root.alpha = 0f
+        videoPlayer.toposcan = effect
+        imagePlayer.toposcan = effect
+        effect.onSurfaceReady = { videoPlayer.setToposcanSurface(it) }
+        effect.onFinished = { if (!isStopped && !blackOutMode) fadeOutCurrentItem() }
+        effect.onFailure = { restoreStandardPlayback() }
+        effect.onColourModeRequired = { switchToposcanColourMode(it) }
+        effect.onUnsupportedContent = { reason ->
+            restoreStandardPlayback(disablePreference = false)
+            NotificationHelper.show(notificationContainer, resources.getString(R.string.toposcan_hdr_bypass, reason))
+        }
+    }
+
+    private fun switchToposcanColourMode(
+        hdr: Boolean,
+        media: AerialMedia? = currentMedia,
+    ) {
+        if (isStopped) return
+        val old = toposcan ?: return
+        if (old.hdrMode == hdr) return
+        canSkip = false
+        videoPlayer.stop()
+        imagePlayer.stop()
+        old.release()
+        (view as ViewGroup).removeView(old)
+        attachToposcan(hdr)
+        toposcan?.setBlackout(blackOutMode)
+        if (!blackOutMode) media?.let(::loadItem)
+    }
+
+    private fun restoreStandardPlayback(disablePreference: Boolean = true) {
+        if (isStopped) return
+        val effect = toposcan ?: return
+        if (disablePreference) GeneralPrefs.toposcanEnabled = false
+        toposcanColourBypass = !disablePreference
+        toposcan = null
+        imagePlayer.toposcan = null
+        recreateVideoPlayer()
+        effect.release()
+        (view as ViewGroup).removeView(effect)
+        videoViewBinding.root.alpha = 1f
+        imageViewBinding.root.alpha = 1f
+        loadingView.animate().cancel()
+        loadingView.alpha = 1f
+        loadingView.visibility = View.VISIBLE
+        canSkip = false
+        if (!blackOutMode) currentMedia?.let(::loadItem)
+        Timber.w("Toposcan standard playback restored; graphics failure: $disablePreference")
     }
 
     private fun handlePlaybackSpeedChanged() {

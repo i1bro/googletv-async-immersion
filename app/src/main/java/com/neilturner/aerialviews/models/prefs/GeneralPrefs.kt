@@ -21,6 +21,17 @@ import com.neilturner.aerialviews.services.weather.WindSpeedUnit
 object GeneralPrefs : KotprefModel() {
     override val kotprefName = "${context.packageName}_preferences"
 
+    var toposcanEnabled by booleanPref(true, "toposcan_enabled")
+    var toposcanBandHeight by stringPref("3", "toposcan_band_height")
+    var toposcanScan by stringPref("32", "toposcan_scan")
+    var toposcanFreezeDelay by stringPref("4", "toposcan_freeze_delay")
+    var toposcanHold by stringPref("5", "toposcan_hold")
+    var toposcanField by stringPref("8", "toposcan_field")
+    var toposcanDirection by stringPref("alternate", "toposcan_direction")
+    var toposcanResolution by stringPref("3840", "toposcan_resolution")
+    var toposcanHdrEnabled by booleanPref(true, "toposcan_hdr_enabled")
+    var toposcanHdrStatus by stringPref("", "toposcan_hdr_status")
+
     // Overlays - Top
     var slotTopLeft1 by nullableEnumValuePref(OverlayType.EMPTY, "slot_top_left1")
     var slotTopLeft2 by nullableEnumValuePref(OverlayType.EMPTY, "slot_top_left2")

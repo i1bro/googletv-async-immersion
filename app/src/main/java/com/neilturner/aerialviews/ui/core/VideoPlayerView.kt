@@ -2,10 +2,13 @@ package com.neilturner.aerialviews.ui.core
 
 import android.content.Context
 import android.util.AttributeSet
+import android.view.Surface
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -23,6 +26,7 @@ import com.neilturner.aerialviews.ui.helpers.LocaleHelper
 import com.neilturner.aerialviews.ui.helpers.PermissionHelper
 import com.neilturner.aerialviews.ui.helpers.RefreshRateHelper
 import com.neilturner.aerialviews.ui.helpers.VolumeHelper
+import com.neilturner.aerialviews.ui.toposcan.ToposcanView
 import com.neilturner.aerialviews.utils.FirebaseHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +47,37 @@ class VideoPlayerView
     ) : PlayerView(context.applicationContext, attrs, defStyleAttr),
         Player.Listener {
         private lateinit var exoPlayer: ExoPlayer
+        var toposcan: ToposcanView? = null
+        private var effectStarted = false
+
+        fun setToposcanSurface(surface: Surface) {
+            effectStarted = false
+            exoPlayer.setVideoSurface(surface)
+        }
+
+        override fun onRenderedFirstFrame() {
+            if (effectStarted || toposcan == null) return
+            effectStarted = true
+            val format = exoPlayer.videoFormat
+            if (format != null && toposcan?.acceptsVideo(format) != true) return
+            val size = exoPlayer.videoSize
+            toposcan?.beginVideo(
+                size.width.toFloat() * size.pixelWidthHeightRatio / size.height.coerceAtLeast(1),
+                format?.frameRate ?: 30f,
+                format?.colorInfo,
+            )
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
+            if (toposcan == null) return
+            for (group in tracks.groups) {
+                if (group.type != C.TRACK_TYPE_VIDEO) continue
+                for (index in 0 until group.length) {
+                    if (group.isTrackSelected(index) && toposcan?.acceptsVideo(group.getTrackFormat(index)) != true) return
+                }
+            }
+        }
+
         private var state = VideoState()
 
         private var listener: OnVideoPlayerEventListener? = null
@@ -120,6 +155,7 @@ class VideoPlayerView
         }
 
         fun setVideo(media: AerialMedia) {
+            effectStarted = false
             state = VideoState() // Reset params for each video
             state.type = media.source
             cancelVolumeFade()
@@ -262,7 +298,7 @@ class VideoPlayerView
                 val maxVideoLength = GeneralPrefs.maxVideoLength.toLong() * 1000
                 val isLengthLimited = maxVideoLength >= 10000
                 val isShortVideo = exoPlayer.duration in 1..<maxVideoLength
-                if (isShortVideo && isLengthLimited && GeneralPrefs.loopShortVideos) {
+                if (toposcan != null || (isShortVideo && isLengthLimited && GeneralPrefs.loopShortVideos)) {
                     player?.repeatMode = Player.REPEAT_MODE_ALL
                 } else {
                     player?.repeatMode = Player.REPEAT_MODE_OFF
@@ -282,7 +318,7 @@ class VideoPlayerView
                 if (exoPlayer.isPlaying) {
                     Timber.i("Ready, Playing...")
 
-                    if (GeneralPrefs.refreshRateSwitching &&
+                    if (!GeneralPrefs.toposcanEnabled && GeneralPrefs.refreshRateSwitching &&
                         PermissionHelper.hasSystemOverlayPermission(
                             context,
                         )
@@ -480,6 +516,7 @@ class VideoPlayerView
         }
 
         private fun setupAlmostFinishedRunnable() {
+            if (toposcan != null) return
             removeCallbacks(almostFinishedRunnable)
 
             if (state.startPosition <= 0 && state.endPosition <= 0 && state.type != AerialMediaSource.RTSP) {

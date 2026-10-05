@@ -1,6 +1,7 @@
 package com.neilturner.aerialviews.ui.core
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.drawable.Animatable
 import android.graphics.drawable.Drawable
 import android.net.Uri
@@ -9,6 +10,7 @@ import android.util.AttributeSet
 import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.appcompat.widget.AppCompatImageView
+import androidx.core.graphics.drawable.toBitmap
 import coil3.ImageLoader
 import coil3.asDrawable
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
@@ -29,6 +31,7 @@ import com.neilturner.aerialviews.ui.controls.ProgressState
 import com.neilturner.aerialviews.ui.core.ImagePlayerHelper.buildGifDecoder
 import com.neilturner.aerialviews.ui.core.ImagePlayerHelper.buildOkHttpClient
 import com.neilturner.aerialviews.ui.helpers.BitmapHelper
+import com.neilturner.aerialviews.ui.toposcan.ToposcanView
 import com.neilturner.aerialviews.utils.FirebaseHelper
 import com.neilturner.aerialviews.utils.filename
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +46,7 @@ import java.io.PushbackInputStream
 import kotlin.time.Duration.Companion.milliseconds
 
 class ImagePlayerView : FrameLayout {
+    var toposcan: ToposcanView? = null
     constructor(context: Context) : super(context)
     constructor(context: Context, attrs: AttributeSet?) : super(context, attrs)
     constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) : super(context, attrs, defStyleAttr)
@@ -199,13 +203,26 @@ class ImagePlayerView : FrameLayout {
                     .size(targetWidth, targetHeight)
                     // The pre-S blurred background is a CPU bitmap operation. Coil hardware
                     // bitmaps cannot be drawn into the software canvas used by Drawable.toBitmap().
-                    .allowHardware(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || !GeneralPrefs.photoBackgroundBlurEnabled)
-                    .target(
+                    .allowHardware(
+                        toposcan == null && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || !GeneralPrefs.photoBackgroundBlurEnabled),
+                    ).target(
                         onStart = {
                             // resetImageTransforms()
                         },
                         onSuccess = { image ->
                             val drawable = image.asDrawable(resources)
+                            toposcan?.let { effect ->
+                                val limit = maxOf(effect.renderSize.width, effect.renderSize.height)
+                                val ratio = minOf(1.0, limit.toDouble() / maxOf(image.width, image.height))
+                                val bitmap =
+                                    drawable
+                                        .toBitmap(
+                                            (image.width * ratio).toInt().coerceAtLeast(1),
+                                            (image.height * ratio).toInt().coerceAtLeast(1),
+                                            Bitmap.Config.ARGB_8888,
+                                        ).copy(Bitmap.Config.ARGB_8888, false)
+                                effect.beginImage(bitmap)
+                            }
                             blurHelper.update(drawable.takeIf { shouldShowBlurBackground(media, it) })
                             setForegroundDrawable(drawable)
                         },
@@ -303,6 +320,7 @@ class ImagePlayerView : FrameLayout {
     }
 
     private fun resolveTargetSize(): Pair<Int, Int> {
+        toposcan?.let { return it.renderSize.width to it.renderSize.height }
         val width = if (this.width > 0) this.width else resources.displayMetrics.widthPixels
         val height = if (this.height > 0) this.height else resources.displayMetrics.heightPixels
         return Pair(width, height)
@@ -329,6 +347,7 @@ class ImagePlayerView : FrameLayout {
     }
 
     fun resumeTimer(pauseDuration: Long) {
+        if (toposcan != null) return
         if (pausedTimestamp > 0) {
             remainingDuration = maxOf(0, remainingDuration - pauseDuration)
             if (remainingDuration > 0) {
@@ -380,6 +399,7 @@ class ImagePlayerView : FrameLayout {
 
     private fun runSetupFinishedRunnable() {
         listener?.onImagePrepared()
+        if (toposcan != null) return
 
         val duration = GeneralPrefs.slideshowSpeed.toLong() * 1000
         val fadeDuration = GeneralPrefs.mediaFadeOutDuration.toLong()

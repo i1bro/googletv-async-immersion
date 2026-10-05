@@ -17,6 +17,7 @@ Instructions for AI coding agents working on the Aerial Views project.
 - Flavor dimension `version`; flavors: `github`, `beta` (default), `googleplay`, `googleplaybeta`, `amazon`, `fdroid`.
 - Build types: `debug` (applicationIdSuffix `.debug`, minify off, LeakCanary on) and `release` (R8 + resource shrinking, `proguard-rules.pro`).
 - Use the **beta** flavor for local development and verification. Debug variant = `betaDebug`; release variant = `betaRelease`.
+- This fork also has the **immersion** flavor for distribution: `immersionRelease` and `immersionDebug`. It has a separate app ID and reuses the F-Droid no-op Firebase adapter. Verify this flavor too when changing packaging or preparing releases.
 
 ## Build commands (prefix with `:app`)
 | Goal | Command |
@@ -37,7 +38,7 @@ Run unit tests first — they fail fast on compile errors. Signed `betaRelease` 
 ## Testing
 - JVM unit tests live in `app/src/test`. Framework: JUnit 5 (Jupiter) via `de.mannodermaus.android-junit5`, MockK for mocks, `kotlinx-coroutines-test` for coroutines.
 - Task naming follows `<Flavor><BuildType>` (same pattern as CI's `testGithubReleaseUnitTest`): `testBetaDebugUnitTest`, `testBetaReleaseUnitTest`.
-- No instrumentation tests currently (`app/src/androidTest` is empty).
+- Toposcan instrumentation tests live in `app/src/androidTest`: render precision, playback, overlays, bounded preview, and a capability-gated HDR device test. The test fixtures are synthetic and must not enter distribution APKs.
 - Test logging is verbose (full stack traces, started/skipped/passed/failed, stdout shown) — keep it.
 
 ## Code style
@@ -60,4 +61,5 @@ Run unit tests first — they fail fast on compile errors. Signed `betaRelease` 
 ## Git / hygiene
 - Do not commit build outputs (`app/build/`, `.gradle/`), `*.apk/aab`, or `*.log`.
 - Do not add secrets, keystores.
+- Fork release signing uses ignored `signing/immersion.properties` and a private keystore. Do not replace an existing signing key: Android updates require the same certificate. Published release APKs must be non-debuggable and must not include LeakCanary or Firebase SDKs.
 - Stage only intended files and write concise, repo-style commit messages. Commit only when explicitly asked.

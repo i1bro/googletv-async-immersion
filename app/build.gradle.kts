@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.util.Properties
+import com.google.firebase.perf.plugin.FirebasePerfExtension
 
 plugins {
     alias(libs.plugins.android.application)
@@ -103,6 +104,13 @@ android {
     }
 
     signingConfigs {
+        create("immersion") {
+            val releaseProps = loadProperties("signing/immersion.properties")
+            storeFile = releaseProps["storeFile"]?.let { rootProject.file(it) }
+            storePassword = releaseProps["storePassword"] as String?
+            keyAlias = releaseProps["keyAlias"] as String?
+            keyPassword = releaseProps["keyPassword"] as String?
+        }
         create("release") {
             val releaseProps = loadProperties("signing/release.properties")
             storeFile = releaseProps["storeFile"]?.let { file(it) }
@@ -121,6 +129,16 @@ android {
 
     flavorDimensions += "version"
     productFlavors {
+        create("immersion") {
+            dimension = "version"
+            applicationId = "com.i1bro.googletv.asyncimmersion"
+            versionCode = 1
+            versionName = "0.1.0-alpha.1"
+            signingConfig = signingConfigs.getByName("immersion")
+            configure<FirebasePerfExtension> {
+                setInstrumentationEnabled(false)
+            }
+        }
         create("github") {
             signingConfig = signingConfigs.getByName("legacy")
             dimension = "version"
@@ -158,10 +176,18 @@ android {
         getByName("googleplaybeta").kotlin.directories.add("src/common/java")
         getByName("amazon").kotlin.directories.add("src/common/java")
         getByName("fdroid").kotlin.directories.add("src/fdroid/java")
+        getByName("immersion").kotlin.directories.add("src/fdroid/java")
     }
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
+    }
+}
+
+// This fork uses the existing no-op Firebase adapter and has no Firebase SDKs.
+tasks.configureEach {
+    if (name.contains("Immersion") && (name.endsWith("GoogleServices") || name.contains("Crashlytics"))) {
+        enabled = false
     }
 }
 
@@ -192,6 +218,7 @@ dependencies {
     implementation(libs.sqlite.framework)
     implementation(libs.bundles.exoplayer)
     implementation(libs.media3.container)
+    implementation(libs.media3.effect)
     implementation(libs.sardine.android)
     implementation(libs.smbj)
     implementation(libs.timber)
@@ -203,6 +230,8 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.coroutines.test)
     testRuntimeOnly(libs.junit.jupiter.engine)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.runner)
 
     implementation(libs.profileinstaller)
     "baselineProfile"(project(":baselineprofile"))

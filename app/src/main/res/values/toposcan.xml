@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="toposcan_title">Toposcan</string>
+    <string name="toposcan_enable">Toposcan mode</string>
+    <string name="toposcan_band">Band height (1080p pixels)</string>
+    <string name="toposcan_scan">Scan duration (seconds)</string>
+    <string name="toposcan_freeze">Freeze delay (seconds)</string>
+    <string name="toposcan_hold">Still duration (seconds)</string>
+    <string name="toposcan_field">Colour field duration (seconds)</string>
+    <string name="toposcan_direction">Scan direction</string>
+    <string name="toposcan_resolution">Rendering width limit</string>
+    <string name="toposcan_preview">Preview (2 minutes)</string>
+    <string name="toposcan_hdr_bypass">Standard playback: %1$s</string>
+    <string name="toposcan_hdr_enable">HDR10 effect</string>
+    <string name="toposcan_hdr_status">HDR10 status</string>
+    <string-array name="toposcan_band_values"><item>1</item><item>2</item><item>3</item><item>4</item><item>6</item><item>8</item><item>12</item></string-array>
+    <string-array name="toposcan_scan_values"><item>8</item><item>16</item><item>24</item><item>32</item><item>48</item><item>64</item><item>96</item></string-array>
+    <string-array name="toposcan_delay_values"><item>0</item><item>1</item><item>2</item><item>4</item><item>8</item><item>12</item><item>16</item></string-array>
+    <string-array name="toposcan_hold_values"><item>0</item><item>3</item><item>5</item><item>10</item><item>20</item><item>30</item></string-array>
+    <string-array name="toposcan_field_values"><item>1</item><item>2</item><item>4</item><item>8</item><item>12</item><item>20</item></string-array>
+    <string-array name="toposcan_direction_entries"><item>Alternate</item><item>Left to right</item><item>Right to left</item></string-array>
+    <string-array name="toposcan_direction_values"><item>alternate</item><item>left</item><item>right</item></string-array>
+    <string-array name="toposcan_resolution_values"><item>1280</item><item>1920</item><item>3840</item></string-array>
+</resources>

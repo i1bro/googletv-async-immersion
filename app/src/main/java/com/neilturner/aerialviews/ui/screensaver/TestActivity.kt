@@ -2,6 +2,8 @@ package com.neilturner.aerialviews.ui.screensaver
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -19,6 +21,12 @@ import timber.log.Timber
 
 class TestActivity : AppCompatActivity() {
     private lateinit var screenController: ScreenController
+    private val timeoutHandler = Handler(Looper.getMainLooper())
+    private val endPreview = Runnable { finishWithResult() }
+
+    companion object {
+        const val EXTRA_PREVIEW_TIMEOUT_SECONDS = "toposcan_preview_timeout_seconds"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,6 +34,10 @@ class TestActivity : AppCompatActivity() {
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setTitle(R.string.app_name)
         supportActionBar?.hide()
+        if (intent.hasExtra(EXTRA_PREVIEW_TIMEOUT_SECONDS)) {
+            val seconds = intent.getIntExtra(EXTRA_PREVIEW_TIMEOUT_SECONDS, 120).coerceIn(1, 300)
+            timeoutHandler.postDelayed(endPreview, seconds * 1000L)
+        }
     }
 
     override fun onResume() {
@@ -47,6 +59,7 @@ class TestActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        timeoutHandler.removeCallbacks(endPreview)
         super.onDestroy()
         if (this::screenController.isInitialized) {
             screenController.stop()

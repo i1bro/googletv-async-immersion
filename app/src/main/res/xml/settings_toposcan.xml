@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+    <CheckBoxPreference app:key="toposcan_enabled" app:defaultValue="true" app:title="@string/toposcan_enable" />
+    <CheckBoxPreference app:key="toposcan_hdr_enabled" app:defaultValue="true" app:title="@string/toposcan_hdr_enable" />
+    <Preference app:key="toposcan_hdr_diagnostics" app:title="@string/toposcan_hdr_status" app:selectable="false" />
+    <ListPreference app:key="toposcan_band_height" app:defaultValue="3" app:title="@string/toposcan_band"
+        app:entries="@array/toposcan_band_values" app:entryValues="@array/toposcan_band_values" app:useSimpleSummaryProvider="true" />
+    <ListPreference app:key="toposcan_scan" app:defaultValue="32" app:title="@string/toposcan_scan"
+        app:entries="@array/toposcan_scan_values" app:entryValues="@array/toposcan_scan_values" app:useSimpleSummaryProvider="true" />
+    <ListPreference app:key="toposcan_freeze_delay" app:defaultValue="4" app:title="@string/toposcan_freeze"
+        app:entries="@array/toposcan_delay_values" app:entryValues="@array/toposcan_delay_values" app:useSimpleSummaryProvider="true" />
+    <ListPreference app:key="toposcan_hold" app:defaultValue="5" app:title="@string/toposcan_hold"
+        app:entries="@array/toposcan_hold_values" app:entryValues="@array/toposcan_hold_values" app:useSimpleSummaryProvider="true" />
+    <ListPreference app:key="toposcan_field" app:defaultValue="8" app:title="@string/toposcan_field"
+        app:entries="@array/toposcan_field_values" app:entryValues="@array/toposcan_field_values" app:useSimpleSummaryProvider="true" />
+    <ListPreference app:key="toposcan_direction" app:defaultValue="alternate" app:title="@string/toposcan_direction"
+        app:entries="@array/toposcan_direction_entries" app:entryValues="@array/toposcan_direction_values" app:useSimpleSummaryProvider="true" />
+    <ListPreference app:key="toposcan_resolution" app:defaultValue="3840" app:title="@string/toposcan_resolution"
+        app:entries="@array/toposcan_resolution_values" app:entryValues="@array/toposcan_resolution_values" app:useSimpleSummaryProvider="true" />
+    <Preference app:key="toposcan_preview" app:title="@string/toposcan_preview" />
+</PreferenceScreen>

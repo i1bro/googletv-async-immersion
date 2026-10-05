@@ -92,7 +92,7 @@ object VideoPlayerHelper {
     ): ExoPlayer {
         val parametersBuilder = Parameters.Builder()
 
-        if (prefs.enableTunneling) {
+        if (prefs.enableTunneling && !prefs.toposcanEnabled) {
             parametersBuilder
                 .setTunnelingEnabled(true)
         }
