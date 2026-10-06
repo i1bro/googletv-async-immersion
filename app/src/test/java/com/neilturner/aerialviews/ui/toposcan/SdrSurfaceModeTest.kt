@@ -23,4 +23,12 @@ class SdrSurfaceModeTest {
         assertEquals(0, mode.alphaBits)
         assertTrue(mode.mediaOverlay)
     }
+
+    @Test
+    fun `tiled mode is opt in and retains RGBA below native overlays`() {
+        val mode = SdrSurfaceMode.fromPreference("tiled")
+        assertEquals(SdrSurfaceMode.TILED, mode)
+        assertEquals(8, mode.alphaBits)
+        assertFalse(mode.mediaOverlay)
+    }
 }

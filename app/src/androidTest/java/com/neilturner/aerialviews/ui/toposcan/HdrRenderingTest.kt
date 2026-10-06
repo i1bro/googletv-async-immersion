@@ -162,6 +162,7 @@ class HdrRenderingTest {
             shader.setSamplerTexIdUniform("uLive", live, 0)
             shader.setSamplerTexIdUniform("uHistory", live, 1)
             shader.setSamplerTexIdUniform("uPrevious", previous, 2)
+            shader.setFloatsUniform("uRegion", floatArrayOf(0f, 0f, 1f, 1f))
             mapOf(
                 "uPhase" to phase.ordinal.toFloat(),
                 "uProgress" to progress,

@@ -2,7 +2,6 @@ package com.neilturner.aerialviews.ui.toposcan
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.PixelFormat
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20.GL_CLAMP_TO_EDGE
@@ -69,6 +68,7 @@ import android.opengl.GLES20.glTexParameteri
 import android.opengl.GLES20.glUniform1f
 import android.opengl.GLES20.glUniform1i
 import android.opengl.GLES20.glUniform2f
+import android.opengl.GLES20.glUniform4f
 import android.opengl.GLES20.glUniformMatrix4fv
 import android.opengl.GLES20.glUseProgram
 import android.opengl.GLES20.glVertexAttribPointer
@@ -76,8 +76,10 @@ import android.opengl.GLES20.glViewport
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.GLUtils
+import android.os.Handler
 import android.view.Choreographer
 import android.view.Surface
+import android.widget.FrameLayout
 import androidx.media3.common.ColorInfo
 import androidx.media3.common.Format
 import androidx.media3.common.util.GlUtil
@@ -101,7 +103,7 @@ class ToposcanView(
     val hdrMode: Boolean = false,
     private val graphicsDiagnostic: GraphicsDiagnostic? = null,
     private val sdrSurfaceMode: SdrSurfaceMode = SdrSurfaceMode.fromPreference(GeneralPrefs.toposcanSdrSurface),
-) : GLSurfaceView(context),
+) : FrameLayout(context),
     Choreographer.FrameCallback {
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onVideoFrameReady: (() -> Unit)? = null
@@ -128,6 +130,7 @@ class ToposcanView(
     private val hdrSupport = HdrSupport.inspect(context)
     private val hdrOutput = hdrSupport.output ?: HdrOutput.HDR10
     private val hdrEgl = if (hdrMode) HdrEgl(hdrOutput) else null
+    internal val output = ScanOutputView(context, hdrEgl, sdrSurfaceMode)
     private var maxTextureSize = 2048
     private var graphicsLimitReady = false
 
@@ -151,21 +154,9 @@ class ToposcanView(
         if (graphicsDiagnostic == null) {
             GeneralPrefs.toposcanPlaybackStatus = "Starting ${if (hdrMode) hdrOutput.label else "SDR"}; waiting for EGL surface"
         }
-        if (hdrEgl != null) {
-            holder.setFormat(PixelFormat.RGBA_1010102)
-            setEGLConfigChooser(hdrEgl)
-            setEGLContextFactory(hdrEgl)
-            setEGLWindowSurfaceFactory(hdrEgl)
-        } else {
-            setEGLContextClientVersion(2)
-            if (sdrSurfaceMode == SdrSurfaceMode.RGBA) holder.setFormat(PixelFormat.RGBA_8888)
-            setEGLConfigChooser(8, 8, 8, sdrSurfaceMode.alphaBits, 0, 0)
-        }
-        // Both modes remain below the app window, so native clock/OSD views stay visible.
-        setZOrderMediaOverlay(hdrMode || sdrSurfaceMode.mediaOverlay)
-        preserveEGLContextOnPause = true
-        setRenderer(renderer)
-        renderMode = RENDERMODE_WHEN_DIRTY
+        output.primary.setRenderer(renderer)
+        output.primary.renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+        addView(output, LayoutParams(-1, -1))
     }
 
     override fun onSizeChanged(
@@ -187,14 +178,24 @@ class ToposcanView(
                 graphicsDiagnostic.onResult(GraphicsDiagnostic.Result("SKIPPED: GPU size limit $maxTextureSize"))
                 return
             }
-            holder.setFixedSize(size.width, size.height)
+            output.setBufferSize(size)
             return
         }
         val mode = display?.mode?.takeIf { DeviceHelper.isTV(context) }
         val size = RenderSize.choose(mode?.physicalWidth ?: width, mode?.physicalHeight ?: height, settings.width, maxTextureSize)
-        holder.setFixedSize(size.width, size.height)
+        output.setBufferSize(size)
         renderSize = size
     }
+
+    internal fun queueEvent(action: Runnable) = output.primary.queueEvent(action)
+
+    private fun requestRender() = output.primary.requestRender()
+
+    internal fun copyPresented(
+        bitmap: Bitmap,
+        handler: Handler,
+        callback: (Int) -> Unit,
+    ) = output.copyPresented(bitmap, handler, callback)
 
     fun acceptsVideo(format: Format): Boolean {
         videoDescription =
@@ -283,8 +284,9 @@ class ToposcanView(
         onFailure = null
         onUnsupportedContent = null
         onColourModeRequired = null
+        output.release()
         queueEvent { renderer.release() }
-        onPause()
+        output.primary.onPause()
         videoSurface = null
     }
 
@@ -293,7 +295,7 @@ class ToposcanView(
         super.onDetachedFromWindow()
     }
 
-    private inner class ScanRenderer : Renderer {
+    private inner class ScanRenderer : GLSurfaceView.Renderer {
         val timeline = ScanTimeline(settings)
         var blackout = false
         private val pendingFrame = AtomicBoolean()
@@ -345,6 +347,7 @@ class ToposcanView(
             config: EGLConfig?,
         ) {
             try {
+                output.contextCreated(config)
                 gpu = glGetString(GL_RENDERER).orEmpty()
                 outputDescription = describeOutput(config)
                 hasVideoFrame = false
@@ -410,8 +413,8 @@ class ToposcanView(
             w: Int,
             h: Int,
         ) {
-            width = w
-            height = h
+            width = output.bufferSize.width
+            height = output.bufferSize.height
             diagnosticPrepared = false
             diagnosticReported = false
             if (failed) return
@@ -422,8 +425,8 @@ class ToposcanView(
                         GL_TEXTURE_2D,
                         0,
                         if (hdrMode) GLES30.GL_RGBA16F else GL_RGBA,
-                        w,
-                        h,
+                        width,
+                        height,
                         0,
                         GL_RGBA,
                         if (hdrMode) GLES30.GL_HALF_FLOAT else GL_UNSIGNED_BYTE,
@@ -433,11 +436,13 @@ class ToposcanView(
                     glClearColor(0f, 0f, 0f, 1f)
                     glClear(GL_COLOR_BUFFER_BIT)
                 }
-                check(glGetError() == GL_NO_ERROR) { "Toposcan texture allocation failed: ${w}x$h" }
-                renderSize = RenderSize(w, h)
+                check(glGetError() == GL_NO_ERROR) { "Toposcan texture allocation failed: ${width}x$height" }
+                renderSize = RenderSize(width, height)
                 val status = if (hdrMode) "${hdrOutput.label} / RGB10_A2 output / FP16 processing" else "SDR / RGB8"
-                Timber.i("Toposcan buffer: ${w}x$h, $status; working textures: ${w.toLong() * h * (if (hdrMode) 32 else 12) / 1048576} MiB")
-                if (hdrMode) post { GeneralPrefs.toposcanHdrStatus = "${w}x$h $status" }
+                Timber.i(
+                    "Toposcan buffer: ${width}x$height, $status; working textures: ${width.toLong() * height * (if (hdrMode) 32 else 12) / 1048576} MiB",
+                )
+                if (hdrMode) post { GeneralPrefs.toposcanHdrStatus = "${width}x$height $status" }
                 glBindFramebuffer(GL_FRAMEBUFFER, 0)
                 hasPrevious = false
                 frozen = 0
@@ -522,6 +527,7 @@ class ToposcanView(
         override fun onDrawFrame(gl: GL10?) {
             if (failed) return
             try {
+                if (!output.ready()) return
                 val now = System.nanoTime()
                 var timestamp: Long? = null
                 val signalled = pendingFrame.getAndSet(false)
@@ -551,8 +557,10 @@ class ToposcanView(
                 reportStatus()
                 if (!active || blackout) {
                     glBindFramebuffer(GL_FRAMEBUFFER, 0)
-                    glClearColor(0f, 0f, 0f, 1f)
-                    glClear(GL_COLOR_BUFFER_BIT)
+                    output.present {
+                        glClearColor(0f, 0f, 0f, 1f)
+                        glClear(GL_COLOR_BUFFER_BIT)
+                    }
                     return
                 }
                 val elapsed = (now - lastWall) / 1e9
@@ -566,27 +574,16 @@ class ToposcanView(
                 }
                 timeline.advance(elapsed, timestamp)
                 if (timeline.phase == ScanPhase.REVEAL) capture(timeline.freeze)
+                val progress = if (timeline.phase == ScanPhase.REVEAL) timeline.reveal else timeline.progress
                 if (hdrMode) {
                     target(composite)
+                    drawScene(timeline.phase, progress, frozen.toFloat() / width)
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0)
+                    glViewport(0, 0, width, height)
+                    hdrPipeline?.present(composite)
                 } else {
                     glBindFramebuffer(GL_FRAMEBUFFER, 0)
-                    glViewport(0, 0, width, height)
-                }
-                drawScene(
-                    timeline.phase,
-                    if (timeline.phase ==
-                        ScanPhase.REVEAL
-                    ) {
-                        timeline.reveal
-                    } else {
-                        timeline.progress
-                    },
-                    frozen.toFloat() / width,
-                )
-                hdrPipeline?.let {
-                    glBindFramebuffer(GL_FRAMEBUFFER, 0)
-                    glViewport(0, 0, width, height)
-                    it.present(composite)
+                    output.present { tile -> drawScene(timeline.phase, progress, frozen.toFloat() / width, tile = tile) }
                 }
                 val before = timeline.phase
                 frameState = FrameState(before, timeline.time, timeline.video, timeline.direction)
@@ -660,14 +657,15 @@ class ToposcanView(
                 probes += "Previous: ${test.probe()}"
             }
             glBindFramebuffer(GL_FRAMEBUFFER, 0)
-            glViewport(0, 0, width, height)
-            if (test.input == GraphicsDiagnostic.Input.DIRECT) {
-                test.clearPattern()
-            } else {
-                drawScene(ScanPhase.REVEAL, 1f, 1f)
+            output.present { tile ->
+                if (test.input == GraphicsDiagnostic.Input.DIRECT) {
+                    test.clearPattern(tile)
+                } else {
+                    drawScene(ScanPhase.REVEAL, 1f, 1f, tile = tile)
+                }
+                if (!diagnosticReported) probes += "Window(${tile.left},${tile.top}): ${test.probe(tile)}"
             }
             if (!diagnosticReported) {
-                probes += "Window: ${test.probe()}"
                 diagnosticReported = true
                 val report = GraphicsDiagnostic.Result(probes.joinToString(" / "), gpu, outputDescription)
                 post { if (!released) test.onResult(report) }
@@ -730,6 +728,7 @@ class ToposcanView(
             progress: Float,
             freeze: Float,
             previousTexture: Int = previous,
+            tile: OutputTile = OutputTile(0, 0, width, height),
         ) {
             use(scene)
             bind(scene, "uLive", 0, live)
@@ -743,6 +742,13 @@ class ToposcanView(
             glUniform1f(glGetUniformLocation(scene, "uPreviousDirection"), previousDirection)
             glUniform1f(glGetUniformLocation(scene, "uHasPrevious"), if (hasPrevious) 1f else 0f)
             glUniform1f(glGetUniformLocation(scene, "uBand"), maxOf(1f, settings.bandHeight * height / 1080f) / height)
+            glUniform4f(
+                glGetUniformLocation(scene, "uRegion"),
+                tile.left.toFloat() / width,
+                1f - (tile.top + tile.height).toFloat() / height,
+                tile.width.toFloat() / width,
+                tile.height.toFloat() / height,
+            )
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
         }
 
@@ -823,6 +829,7 @@ class ToposcanView(
         }
 
         fun release() {
+            output.releaseGl()
             pendingImage?.recycle()
             pendingImage = null
             surfaceTexture?.setOnFrameAvailableListener(null)
@@ -872,10 +879,11 @@ class ToposcanView(
             precision highp float;
             varying vec2 vUV;
             uniform highp sampler2D uLive, uHistory, uPrevious;
+            uniform vec4 uRegion;
             uniform float uPhase, uProgress, uFreeze, uDirection, uPreviousDirection, uHasPrevious, uBand, uLinearLight;
             float directed(float x, float d) { return d > 0.0 ? x : 1.0 - x; }
             void main() {
-                vec2 uv = vUV;
+                vec2 uv = uRegion.xy + vUV * uRegion.zw;
                 float x = directed(uv.x, uDirection);
                 float y = (floor(uv.y / uBand) + 0.5) * uBand;
                 vec4 colour;

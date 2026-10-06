@@ -85,7 +85,7 @@ class GraphicsDiagnosticActivity : AppCompatActivity() {
         panel.addView(label("${step + 1}/${steps.size} - ${size.width}x${size.height} / ${input.name}", 20f))
         val status =
             label(pendingResult, 14f).apply {
-                maxLines = 4
+                maxLines = 6
                 ellipsize = TextUtils.TruncateAt.END
             }
         panel.addView(status)
@@ -161,7 +161,7 @@ class GraphicsDiagnosticActivity : AppCompatActivity() {
         }
         val bitmap = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888)
         try {
-            PixelCopy.request(view, bitmap, { result ->
+            view.copyPresented(bitmap, handler) { result ->
                 val status =
                     when (result) {
                         PixelCopy.SUCCESS -> if (GraphicsDiagnostic.matches(bitmap)) "OK" else "FAIL colours"
@@ -171,7 +171,7 @@ class GraphicsDiagnosticActivity : AppCompatActivity() {
                     }
                 bitmap.recycle()
                 onResult(status)
-            }, handler)
+            }
         } catch (e: IllegalArgumentException) {
             bitmap.recycle()
             onResult("unavailable: ${e.message}")

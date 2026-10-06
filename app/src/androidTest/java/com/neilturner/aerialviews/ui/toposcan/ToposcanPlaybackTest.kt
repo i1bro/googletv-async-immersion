@@ -39,7 +39,13 @@ class ToposcanPlaybackTest {
     private val context = instrumentation.targetContext
 
     @Test
-    fun videoHistoryPhotosClockPauseAndNextCycle() {
+    fun videoHistoryPhotosClockPauseAndNextCycle() = verifyPlayback(SdrSurfaceMode.RGBA)
+
+    @Test
+    fun tiledVideoHistoryPhotosClockPauseAndNextCycle() = verifyPlayback(SdrSurfaceMode.TILED)
+
+    private fun verifyPlayback(mode: SdrSurfaceMode) {
+        val oldSurface = GeneralPrefs.toposcanSdrSurface
         val video = File(context.cacheDir, "toposcan-test.mp4")
         instrumentation.context.assets
             .open("toposcan-test.mp4")
@@ -87,6 +93,7 @@ class ToposcanPlaybackTest {
                 GeneralPrefs.shuffleVideos = false
                 GeneralPrefs.playlistCache = false
                 GeneralPrefs.toposcanEnabled = true
+                GeneralPrefs.toposcanSdrSurface = mode.preference
                 GeneralPrefs.toposcanScan = "8"
                 GeneralPrefs.toposcanFreezeDelay = "2"
                 GeneralPrefs.toposcanHold = "0"
@@ -100,7 +107,7 @@ class ToposcanPlaybackTest {
             instrumentation.runOnMainSync { effect = descendants(root).filterIsInstance<ToposcanView>().single() }
             await { effect.frameState.phase == ScanPhase.FIELD }
             // The phone emulator's UI is 960x540. Exercise a genuine 4K surface independently.
-            instrumentation.runOnMainSync { effect.holder.setFixedSize(3840, 2160) }
+            instrumentation.runOnMainSync { effect.output.setBufferSize(RenderSize(3840, 2160)) }
             await { effect.renderSize == RenderSize(3840, 2160) }
             await { effect.frameState.let { it.video && it.phase == ScanPhase.REVEAL && it.time in 4.0..4.3 } }
             val a = pixels(effect)
@@ -112,7 +119,7 @@ class ToposcanPlaybackTest {
             assertEquals(2160, a.height)
             a.recycle()
             b.recycle()
-            save("video-reveal", instrumentation.uiAutomation.takeScreenshot())
+            save("${mode.preference}-video-reveal", instrumentation.uiAutomation.takeScreenshot())
             assertTrue("Clock overlay missing", descendants(root).filterIsInstance<ClockOverlay>().any { it.isShown })
 
             lateinit var player: VideoPlayerView
@@ -135,9 +142,8 @@ class ToposcanPlaybackTest {
             val black = pixels(effect)
             assertTrue(
                 "Effect remains visible in blackout",
-                (0 until black.width step 32).all {
-                    black.getPixel(it, black.height / 2) ==
-                        Color.BLACK
+                listOf(black.height / 4, black.height * 3 / 4).all { y ->
+                    (0 until black.width step 32).all { x -> black.getPixel(x, y) == Color.BLACK }
                 },
             )
             black.recycle()
@@ -148,14 +154,22 @@ class ToposcanPlaybackTest {
             }
             await { effect.frameState.time > pausedTime }
 
-            await(45_000) { effect.frameState.let { !it.video && it.phase == ScanPhase.REVEAL && it.time > 3 } }
+            await(45_000) { effect.frameState.let { !it.video && it.phase == ScanPhase.REVEAL && it.time > 6 } }
             assertEquals(-1f, effect.frameState.direction)
             val image = pixels(effect)
             assertEquals(3840, image.width)
-            val detail = (3000 until 3100).map { Color.red(image.getPixel(it, image.height / 2)) }
-            assertTrue("4K one-pixel photo detail was lost", detail.zipWithNext().map { abs(it.first - it.second) }.average() > 100)
+            for (y in listOf(100, 1079, 1080, 1500, 2150)) {
+                for (start in listOf(1500, 1880, 3000)) {
+                    val detail = (start until start + 100).map { Color.red(image.getPixel(it, y)) }
+                    assertTrue("4K detail was lost at ($start, $y)", detail.zipWithNext().map { abs(it.first - it.second) }.average() > 100)
+                    assertTrue(
+                        "Vertical mapping is wrong at ($start, $y)",
+                        abs(y * 255 / 2160 - Color.green(image.getPixel(start, y))) <= 2,
+                    )
+                }
+            }
             image.recycle()
-            save("photo-reveal", instrumentation.uiAutomation.takeScreenshot())
+            save("${mode.preference}-photo-reveal", instrumentation.uiAutomation.takeScreenshot())
             await(35_000) { effect.frameState.let { it.video && it.phase == ScanPhase.REVEAL } }
             assertEquals(1f, effect.frameState.direction)
             assertTrue("Renderer disabled itself", GeneralPrefs.toposcanEnabled)
@@ -172,6 +186,7 @@ class ToposcanPlaybackTest {
             assertTrue("HDR bypass must not turn off the user's effect preference", GeneralPrefs.toposcanEnabled)
         } finally {
             activity?.let { instrumentation.runOnMainSync { it.finish() } }
+            instrumentation.runOnMainSync { GeneralPrefs.toposcanSdrSurface = oldSurface }
             server.close()
         }
     }
@@ -214,14 +229,14 @@ class ToposcanPlaybackTest {
     }
 
     private fun pixels(view: ToposcanView): Bitmap {
-        val size = view.holder.surfaceFrame
-        val bitmap = Bitmap.createBitmap(size.width(), size.height(), Bitmap.Config.ARGB_8888)
+        val size = view.renderSize
+        val bitmap = Bitmap.createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888)
         val latch = CountDownLatch(1)
         var status = -1
-        PixelCopy.request(view, bitmap, {
+        view.copyPresented(bitmap, Handler(Looper.getMainLooper())) {
             status = it
             latch.countDown()
-        }, Handler(Looper.getMainLooper()))
+        }
         assertTrue(latch.await(5, TimeUnit.SECONDS))
         assertEquals(PixelCopy.SUCCESS, status)
         return bitmap

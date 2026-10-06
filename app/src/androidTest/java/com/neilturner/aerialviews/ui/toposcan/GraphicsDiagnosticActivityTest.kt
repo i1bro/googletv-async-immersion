@@ -33,6 +33,9 @@ class GraphicsDiagnosticActivityTest {
     @Test
     fun legacyStagesStillRenderKnownPixels() = verifyStages(SdrSurfaceMode.LEGACY)
 
+    @Test
+    fun tiledStagesRenderAllFourSubmittedWindows() = verifyStages(SdrSurfaceMode.TILED)
+
     @Suppress("DEPRECATION")
     private fun verifyStages(mode: SdrSurfaceMode) {
         instrumentation.setInTouchMode(false)
@@ -73,10 +76,10 @@ class GraphicsDiagnosticActivityTest {
                 val pixels = Bitmap.createBitmap(surface.renderSize.width, surface.renderSize.height, Bitmap.Config.ARGB_8888)
                 val copied = CountDownLatch(1)
                 var copyResult = -1
-                PixelCopy.request(surface, pixels, {
+                surface.copyPresented(pixels, Handler(Looper.getMainLooper())) {
                     copyResult = it
                     copied.countDown()
-                }, Handler(Looper.getMainLooper()))
+                }
                 assertTrue(copied.await(5, TimeUnit.SECONDS))
                 assertEquals(PixelCopy.SUCCESS, copyResult)
                 val samples =
@@ -90,7 +93,36 @@ class GraphicsDiagnosticActivityTest {
                     }
                 assertTrue("Displayed buffer has incorrect pixels at stage $stage", GraphicsDiagnostic.matches(samples))
                 pixels.recycle()
+                instrumentation.runOnMainSync {
+                    val windows = surface.output.surfaces
+                    assertEquals(if (mode == SdrSurfaceMode.TILED) 4 else 1, windows.size)
+                    val divisor = if (mode == SdrSurfaceMode.TILED) 2 else 1
+                    for (window in windows) {
+                        assertEquals(surface.renderSize.width / divisor, window.holder.surfaceFrame.width())
+                        assertEquals(surface.renderSize.height / divisor, window.holder.surfaceFrame.height())
+                    }
+                }
                 if (stage == 5) save("graphics-${mode.preference}-4k-external", instrumentation.uiAutomation.takeScreenshot())
+                if (stage == 5 && mode == SdrSurfaceMode.TILED) {
+                    instrumentation.runOnMainSync { surface.visibility = View.INVISIBLE }
+                    instrumentation.waitForIdleSync()
+                    Thread.sleep(200)
+                    instrumentation.runOnMainSync { surface.visibility = View.VISIBLE }
+                    val restored = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888)
+                    var valid = false
+                    val restoreDeadline = System.currentTimeMillis() + 10_000
+                    while (!valid && System.currentTimeMillis() < restoreDeadline) {
+                        val latch = CountDownLatch(1)
+                        surface.copyPresented(restored, Handler(Looper.getMainLooper())) { result ->
+                            valid = result == PixelCopy.SUCCESS && GraphicsDiagnostic.matches(restored)
+                            latch.countDown()
+                        }
+                        assertTrue(latch.await(5, TimeUnit.SECONDS))
+                        if (!valid) Thread.sleep(100)
+                    }
+                    restored.recycle()
+                    assertTrue("Tiled surfaces did not recover after hide/show", valid)
+                }
                 assertTrue("Remote focus is missing", checkNotNull(button).hasFocus())
                 instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_CENTER)
                 instrumentation.waitForIdleSync()

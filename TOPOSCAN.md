@@ -27,7 +27,7 @@ Open **Settings > Toposcan**. Available controls:
 - HDR effect (default on) and HDR status, including the last playback result or rejection reason. An existing installation keeps its toggle setting.
 - HDR output: Auto (default), HDR10, or HLG (experimental). Auto prefers supported PQ output on Android 13+, otherwise tries supported HLG output on Android 12+. Explicit choices never silently select a different HDR output.
 - Playback status: last render size, GPU, video format, frame callbacks, latched frames, draw count and scan phase. Stored locally without media URLs.
-- SDR surface output: RGBA8888 / standard layer (default since alpha.5), or RGB / media overlay (legacy). This changes presentation, not source quality or the processing resolution. HDR keeps its separate RGB10_A2 path.
+- SDR surface output: RGBA8888 / standard layer (default since alpha.5), RGB / media overlay (legacy), or Tiled 4K / experimental (alpha.6). This changes presentation, not source quality or the processing resolution. HDR keeps its separate RGB10_A2 path.
 - Band height: 1-12 pixels referenced to a 1080-line screen, default 3.
 - Scan duration: 8-96 seconds, default 32.
 - Trailing freeze delay: 0-16 seconds, default 4.
@@ -68,6 +68,16 @@ On the user's Valerion / Android 12, alpha.4's three 1080p tests were visible, b
 Alpha.5 defaults SDR to an explicitly matched RGBA8888 SurfaceHolder and EGL 8/8/8/8 config on the ordinary SurfaceView media layer. The previous path used EGL 8/8/8/0, an implicit holder format and the media-overlay sublayer. Both remain below the Android app window, so clock and other native overlays stay above the effect. [AOSP SurfaceView](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-12.0.0_r1/core/java/android/view/SurfaceView.java) defines this layer ordering; [GLSurfaceView](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-12.0.0_r1/opengl/java/android/opengl/GLSurfaceView.java) selects the EGL component sizes. The matching format/layer change is an experimental workaround, not a confirmed Valerion fix.
 
 After updating, select **SDR surface output > RGBA8888 / standard layer**, keep **Rendering width limit > 3840**, and preview SDR content. Existing resolution and HDR choices are preserved. **RGB / media overlay (legacy)** restores the old presentation setup for comparison. The diagnostic uses whichever SDR surface mode is selected. HDR output, video bitrate, source resolution, processing buffers and the effect are unchanged. There is no TextureView substitution, forced system display mode, root setting, or silent 1080p processing fallback. Full-resolution buffers are verified on the emulator; physical presentation and quality still need checking on the projector.
+
+### Tiled SDR Presentation (alpha.6)
+
+The user reports that alpha.5 still produces a black 3840-wide picture. Alpha.6 adds an opt-in alternative: **SDR surface output > Tiled 4K / experimental**, with **Rendering width limit > 3840**. The default is unchanged. Try it with **Preview (2 minutes)** before changing the system screensaver. Selecting RGBA or legacy restores single-surface output.
+
+In this mode a 3840x2160 image uses four adjacent 1920x1080 SurfaceViews. The decoder, live/frozen/previous textures and scan coordinates remain full resolution. A single GL thread latches the video and advances the timeline once, then draws the corresponding quarter into each surface using the same EGL context. There is no re-encoding, CPU pixel readback during playback, 1080p intermediate image, or extra full-resolution composite texture. Native clock and controls stay above the surfaces. HDR does not use this experimental path.
+
+This specifically avoids presenting a single 3840-wide RGB buffer. It is **not a confirmed Valerion fix**. The Android compositor may still reject this combination, use lower-resolution client composition, or present the four buffers on different display refreshes. Preserving all source pixels in the submitted buffers does not by itself prove 4K detail on the physical projector. Check the middle horizontal/vertical joins during motion and fine image detail on the device. No display-mode or developer-option override is applied.
+
+The existing six-stage graphics test also supports tiled mode: it probes each of the four EGL windows and uses PixelCopy to reassemble their submitted buffers for comparison. This diagnostic copy is not used during playback. A visually black test with passing PixelCopy still needs device-side composition investigation; another successful emulator run cannot settle that question.
 
 ## Valerion Plus: Quality And Safety
 
@@ -185,7 +195,7 @@ The added JVM tests cover stalled/duplicate frames, pause, loop timestamps, zero
 
 `VideoFrameDeliveryTest` deliberately removes SurfaceTexture frame callbacks and does not register a decoder first-frame listener. It checks that polling still starts playback, advances the reveal and produces nonblack pixels. JVM startup-gate tests cover both metadata/frame arrival orders and per-clip reset.
 
-`GraphicsDiagnosticActivityTest` exercises all six diagnostic stages in both RGBA and legacy surface modes, verifies actual EGL channel sizes and their submitted surface pixels with PixelCopy, checks both real buffer sizes and unchanged playback preferences/status, and verifies that early exit leaves an unconfirmed result. JVM tests reject black, cropped and incorrectly ordered colour samples and cover the surface-mode selection policy.
+`GraphicsDiagnosticActivityTest` exercises all six diagnostic stages in RGBA, legacy and tiled surface modes, verifies actual EGL channel sizes and their submitted surface pixels with PixelCopy, checks real buffer sizes and unchanged playback preferences/status, and verifies that early exit leaves an unconfirmed result. Playback tests exercise both ordinary and tiled output, including one-pixel photo detail on both sides of the vertical/horizontal joins. JVM tests reject black, cropped and incorrectly ordered colour samples and cover surface-mode selection and lossless tile geometry.
 
 HDR output tests cover Auto/forced selection, Android 12 HLG prerequisites, rejection of mismatched EGL tags, PQ round-trip precision, PQ-to-HLG 10-bit gradients against an independent double-precision reference, distinct 1000/4000/10000-nit highlights and saturated-colour gamut limits. Offscreen tests verify processing, not physical HDR presentation. The physical HDR playback test remains capability-gated.
 

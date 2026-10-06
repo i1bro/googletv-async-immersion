@@ -35,10 +35,13 @@ class GraphicsDiagnostic(
         }
     }
 
-    fun clearPattern() {
+    fun clearPattern(tile: OutputTile = OutputTile(0, 0, size.width, size.height)) {
         GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
         colours.forEachIndexed { index, colour ->
-            GLES20.glScissor(index * size.width / 4, 0, size.width / 4, size.height)
+            val left = maxOf(index * size.width / 4, tile.left)
+            val right = minOf((index + 1) * size.width / 4, tile.left + tile.width)
+            if (right <= left) return@forEachIndexed
+            GLES20.glScissor(left - tile.left, 0, right - left, tile.height)
             GLES20.glClearColor(channel(colour, 16) / 255f, channel(colour, 8) / 255f, channel(colour, 0) / 255f, 1f)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         }
@@ -46,15 +49,15 @@ class GraphicsDiagnostic(
     }
 
     /** Read all four bars at three heights, including the part beyond a 1080p viewport. */
-    fun probe(): String {
+    fun probe(tile: OutputTile = OutputTile(0, 0, size.width, size.height)): String {
         val pixel = ByteBuffer.allocateDirect(4)
         val samples = mutableListOf<Int>()
         for (row in 0..2) {
             for (column in 0..3) {
                 pixel.clear()
                 GLES20.glReadPixels(
-                    (2 * column + 1) * size.width / 8,
-                    (2 * row + 1) * size.height / 6,
+                    (2 * column + 1) * tile.width / 8,
+                    (2 * row + 1) * tile.height / 6,
                     1,
                     1,
                     GLES20.GL_RGBA,
@@ -67,7 +70,11 @@ class GraphicsDiagnostic(
         }
         val error = GLES20.glGetError()
         if (error != GLES20.GL_NO_ERROR) return "GL error 0x${error.toString(16)}"
-        val bad = samples.withIndex().firstOrNull { (index, sample) -> !matchesColour(sample, colours[index % 4]) }
+        val bad =
+            samples.withIndex().firstOrNull { (index, sample) ->
+                val x = tile.left + (2 * (index % 4) + 1) * tile.width / 8
+                !matchesColour(sample, colours[(x * 4 / size.width).coerceIn(0, 3)])
+            }
         return if (bad == null) {
             "OK"
         } else {

@@ -84,10 +84,10 @@ class VideoFrameDeliveryTest {
             val bitmap = Bitmap.createBitmap(view.renderSize.width, view.renderSize.height, Bitmap.Config.ARGB_8888)
             val copied = CountDownLatch(1)
             var result = -1
-            PixelCopy.request(view, bitmap, {
+            view.copyPresented(bitmap, Handler(Looper.getMainLooper())) {
                 result = it
                 copied.countDown()
-            }, Handler(Looper.getMainLooper()))
+            }
             assertTrue(copied.await(5, TimeUnit.SECONDS))
             assertEquals(PixelCopy.SUCCESS, result)
             assertTrue("Video remained black", Color.red(bitmap.getPixel(bitmap.width / 2, bitmap.height / 2)) > 20)
