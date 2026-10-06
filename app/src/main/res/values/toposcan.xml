@@ -17,6 +17,9 @@
     <string-array name="toposcan_hdr_output_entries"><item>Auto</item><item>HDR10</item><item>HLG (experimental)</item></string-array>
     <string-array name="toposcan_hdr_output_values"><item>auto</item><item>hdr10</item><item>hlg</item></string-array>
     <string name="toposcan_playback_status">Playback status</string>
+    <string name="toposcan_sdr_surface">SDR surface output</string>
+    <string-array name="toposcan_sdr_surface_entries"><item>RGBA8888 / standard layer</item><item>RGB / media overlay (legacy)</item></string-array>
+    <string-array name="toposcan_sdr_surface_values"><item>rgba</item><item>legacy</item></string-array>
     <string name="toposcan_not_started">No preview recorded</string>
     <string name="toposcan_graphics_test">4K graphics test</string>
     <string name="toposcan_graphics_result">4K test result</string>

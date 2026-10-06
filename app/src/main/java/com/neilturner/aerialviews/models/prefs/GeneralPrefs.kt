@@ -34,6 +34,7 @@ object GeneralPrefs : KotprefModel() {
     var toposcanHdrStatus by stringPref("", "toposcan_hdr_status")
     var toposcanPlaybackStatus by stringPref("", "toposcan_playback_status")
     var toposcanGraphicsStatus by stringPref("", "toposcan_graphics_status")
+    var toposcanSdrSurface by stringPref("rgba", "toposcan_sdr_surface")
 
     // Overlays - Top
     var slotTopLeft1 by nullableEnumValuePref(OverlayType.EMPTY, "slot_top_left1")

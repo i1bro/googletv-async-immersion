@@ -27,6 +27,7 @@ Open **Settings > Toposcan**. Available controls:
 - HDR effect (default on) and HDR status, including the last playback result or rejection reason. An existing installation keeps its toggle setting.
 - HDR output: Auto (default), HDR10, or HLG (experimental). Auto prefers supported PQ output on Android 13+, otherwise tries supported HLG output on Android 12+. Explicit choices never silently select a different HDR output.
 - Playback status: last render size, GPU, video format, frame callbacks, latched frames, draw count and scan phase. Stored locally without media URLs.
+- SDR surface output: RGBA8888 / standard layer (default since alpha.5), or RGB / media overlay (legacy). This changes presentation, not source quality or the processing resolution. HDR keeps its separate RGB10_A2 path.
 - Band height: 1-12 pixels referenced to a 1080-line screen, default 3.
 - Scan duration: 8-96 seconds, default 32.
 - Trailing freeze delay: 0-16 seconds, default 4.
@@ -58,7 +59,15 @@ The test uses actual 1920x1080 and 3840x2160 SDR buffers independently of the An
 - IMAGE: a generated pattern through the production photo copy, frozen-history and previous-image buffers, and the production scene shader.
 - EXTERNAL: the same pattern submitted through a full-resolution Surface/SurfaceTexture and the production external-texture shader, then the same effect buffers. This is synthetic RGB input, not a hardware-decoded HEVC frame.
 
-One-shot `glReadPixels` probes compare four known colours at three heights in each relevant buffer and the EGL window before swap. There is no readback in ordinary playback. `Live` or `Frozen` failure points to the corresponding graphics stage; successful intermediate probes with a failing `Window` narrow it to the final draw. All probes passing but a visually black image points towards surface presentation/composition, which GPU readback alone cannot verify. A passing synthetic test does **not** clear the hardware video decoder, YUV sampling, concurrent decoder memory pressure, HDR, or sustained performance. It is a diagnostic, not a 4K compatibility fix.
+One-shot `glReadPixels` probes compare four known colours at three heights in each relevant buffer and the EGL window before swap. Since alpha.5, `PixelCopy` also checks a submitted SurfaceView buffer after a short delay, using a small 64x36 diagnostic copy. This does not change playback resolution. The report records the selected output mode and actual EGL component sizes/native visual ID. PixelCopy requires Android 7+; older devices report it as unavailable. There is no readback in ordinary playback. `Live` or `Frozen` failure points to the corresponding graphics stage; successful intermediate probes with a failing `Window` narrow it to the final draw. A successful `Window` with a failing `PixelCopy` narrows investigation to submission/buffer transport/copying. Both passing but a visually black image points towards surface presentation/composition, which neither probe can verify physically. A passing synthetic test does **not** clear the hardware video decoder, YUV sampling, concurrent decoder memory pressure, HDR, or sustained performance.
+
+### SDR Presentation Workaround (alpha.5)
+
+On the user's Valerion / Android 12, alpha.4's three 1080p tests were visible, but all three 3840x2160 tests were black despite successful Live/Frozen/Previous/Window probes. The failure therefore reproduces without a decoder or the effect shader and after successful GPU readback. This is evidence for a presentation-path problem, not proof of a specific vendor-driver defect.
+
+Alpha.5 defaults SDR to an explicitly matched RGBA8888 SurfaceHolder and EGL 8/8/8/8 config on the ordinary SurfaceView media layer. The previous path used EGL 8/8/8/0, an implicit holder format and the media-overlay sublayer. Both remain below the Android app window, so clock and other native overlays stay above the effect. [AOSP SurfaceView](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-12.0.0_r1/core/java/android/view/SurfaceView.java) defines this layer ordering; [GLSurfaceView](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-12.0.0_r1/opengl/java/android/opengl/GLSurfaceView.java) selects the EGL component sizes. The matching format/layer change is an experimental workaround, not a confirmed Valerion fix.
+
+After updating, select **SDR surface output > RGBA8888 / standard layer**, keep **Rendering width limit > 3840**, and preview SDR content. Existing resolution and HDR choices are preserved. **RGB / media overlay (legacy)** restores the old presentation setup for comparison. The diagnostic uses whichever SDR surface mode is selected. HDR output, video bitrate, source resolution, processing buffers and the effect are unchanged. There is no TextureView substitution, forced system display mode, root setting, or silent 1080p processing fallback. Full-resolution buffers are verified on the emulator; physical presentation and quality still need checking on the projector.
 
 ## Valerion Plus: Quality And Safety
 
@@ -176,7 +185,7 @@ The added JVM tests cover stalled/duplicate frames, pause, loop timestamps, zero
 
 `VideoFrameDeliveryTest` deliberately removes SurfaceTexture frame callbacks and does not register a decoder first-frame listener. It checks that polling still starts playback, advances the reveal and produces nonblack pixels. JVM startup-gate tests cover both metadata/frame arrival orders and per-clip reset.
 
-`GraphicsDiagnosticActivityTest` exercises all six diagnostic stages, verifies their submitted surface pixels with PixelCopy, checks both real buffer sizes and unchanged playback preferences/status, and verifies that early exit leaves an unconfirmed result. JVM tests reject black, cropped and incorrectly ordered colour samples.
+`GraphicsDiagnosticActivityTest` exercises all six diagnostic stages in both RGBA and legacy surface modes, verifies actual EGL channel sizes and their submitted surface pixels with PixelCopy, checks both real buffer sizes and unchanged playback preferences/status, and verifies that early exit leaves an unconfirmed result. JVM tests reject black, cropped and incorrectly ordered colour samples and cover the surface-mode selection policy.
 
 HDR output tests cover Auto/forced selection, Android 12 HLG prerequisites, rejection of mismatched EGL tags, PQ round-trip precision, PQ-to-HLG 10-bit gradients against an independent double-precision reference, distinct 1000/4000/10000-nit highlights and saturated-colour gamut limits. Offscreen tests verify processing, not physical HDR presentation. The physical HDR playback test remains capability-gated.
 

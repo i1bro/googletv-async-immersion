@@ -16,6 +16,7 @@ class GraphicsDiagnostic(
     data class Result(
         val detail: String,
         val gpu: String = "",
+        val output: String = "",
     )
 
     enum class Input {
@@ -82,6 +83,15 @@ class GraphicsDiagnostic(
                 samples.withIndex().all { (index, sample) ->
                     matchesColour(sample, colours[index % 4])
                 }
+
+        internal fun matches(bitmap: Bitmap): Boolean =
+            matches(
+                (0..2).flatMap { row ->
+                    (0..3).map { column ->
+                        bitmap.getPixel((2 * column + 1) * bitmap.width / 8, (2 * row + 1) * bitmap.height / 6)
+                    }
+                },
+            )
 
         private fun matchesColour(
             sample: Int,

@@ -1,5 +1,6 @@
 package com.neilturner.aerialviews.ui.toposcan
 
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -7,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.TextUtils
 import android.view.Gravity
+import android.view.PixelCopy
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
@@ -32,6 +34,7 @@ class GraphicsDiagnosticActivity : AppCompatActivity() {
     private var step = 0
     private var pendingResult = ""
     private var gpu = ""
+    private var output = ""
     private var closing = false
     private var acceptResult = false
     private val endTest = Runnable { finish() }
@@ -108,19 +111,31 @@ class GraphicsDiagnosticActivity : AppCompatActivity() {
                 }
             }
         panel.addView(actions)
-        val onResult: (GraphicsDiagnostic.Result) -> Unit = result@{ report ->
-            if (closing || step != generation || acceptResult) return@result
+        var completed = false
+        var gpuReport: GraphicsDiagnostic.Result? = null
+
+        fun complete(report: GraphicsDiagnostic.Result) {
+            if (closing || step != generation || completed) return
+            completed = true
             if (report.gpu.isNotBlank()) gpu = report.gpu
+            if (report.output.isNotBlank()) output = report.output
             pendingResult = report.detail
-            status.text = "$gpu\n${report.detail}"
+            status.text = "$output\n${report.detail}"
             stageTimeout?.let(handler::removeCallbacks)
             persist()
-            // Let the first tested buffer reach the display before accepting an observation.
+            acceptResult = true
+            buttons.forEach { it.isEnabled = true }
+            buttons.first().requestFocus()
+        }
+        val onResult: (GraphicsDiagnostic.Result) -> Unit = result@{ report ->
+            if (closing || step != generation || completed || gpuReport != null) return@result
+            gpuReport = report
+            // GPU probes run before swap. PixelCopy checks a submitted buffer, not the backbuffer.
             handler.postDelayed({
-                if (!closing && step == generation) {
-                    acceptResult = true
-                    buttons.forEach { it.isEnabled = true }
-                    buttons.first().requestFocus()
+                if (!closing && step == generation && !completed) {
+                    surface?.let { view ->
+                        copyPresented(view) { pixels -> complete(report.copy(detail = "${report.detail} / PixelCopy: $pixels")) }
+                    }
                 }
             }, 750)
         }
@@ -128,12 +143,43 @@ class GraphicsDiagnosticActivity : AppCompatActivity() {
         root.addView(surface, FrameLayout.LayoutParams(-1, -1))
         root.addView(panel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         stageTimeout =
-            Runnable { onResult(GraphicsDiagnostic.Result("TIMEOUT: no GPU result after 15 seconds")) }
-                .also { handler.postDelayed(it, 15_000) }
+            Runnable {
+                complete(
+                    gpuReport?.let { it.copy(detail = "${it.detail} / PixelCopy: TIMEOUT") }
+                        ?: GraphicsDiagnostic.Result("TIMEOUT: no GPU result after 15 seconds"),
+                )
+            }.also { handler.postDelayed(it, 15_000) }
+    }
+
+    private fun copyPresented(
+        view: ToposcanView,
+        onResult: (String) -> Unit,
+    ) {
+        if (Build.VERSION.SDK_INT < 24) {
+            onResult("unavailable below Android 7")
+            return
+        }
+        val bitmap = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888)
+        try {
+            PixelCopy.request(view, bitmap, { result ->
+                val status =
+                    when (result) {
+                        PixelCopy.SUCCESS -> if (GraphicsDiagnostic.matches(bitmap)) "OK" else "FAIL colours"
+                        PixelCopy.ERROR_SOURCE_NO_DATA -> "no submitted buffer"
+                        PixelCopy.ERROR_TIMEOUT -> "TIMEOUT"
+                        else -> "error $result"
+                    }
+                bitmap.recycle()
+                onResult(status)
+            }, handler)
+        } catch (e: IllegalArgumentException) {
+            bitmap.recycle()
+            onResult("unavailable: ${e.message}")
+        }
     }
 
     private fun persist() {
-        val header = "${Build.MODEL} / Android ${Build.VERSION.RELEASE} / ${BuildConfig.VERSION_NAME}\nSDR graphics test\n$gpu"
+        val header = "${Build.MODEL} / Android ${Build.VERSION.RELEASE} / ${BuildConfig.VERSION_NAME}\nSDR graphics test\n$gpu\n$output"
         val pending =
             if (step < steps.size) {
                 val (size, input) = steps[step]

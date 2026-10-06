@@ -28,9 +28,16 @@ class GraphicsDiagnosticActivityTest {
     private val context = instrumentation.targetContext
 
     @Test
+    fun rgbaStagesRenderKnownPixelsAndLeavePlaybackSettingsUnchanged() = verifyStages(SdrSurfaceMode.RGBA)
+
+    @Test
+    fun legacyStagesStillRenderKnownPixels() = verifyStages(SdrSurfaceMode.LEGACY)
+
     @Suppress("DEPRECATION")
-    fun sixStagesRenderKnownPixelsAndLeavePlaybackSettingsUnchanged() {
+    private fun verifyStages(mode: SdrSurfaceMode) {
         instrumentation.setInTouchMode(false)
+        val oldSurface = GeneralPrefs.toposcanSdrSurface
+        instrumentation.runOnMainSync { GeneralPrefs.toposcanSdrSurface = mode.preference }
         val width = GeneralPrefs.toposcanResolution
         val hdr = GeneralPrefs.toposcanHdrEnabled
         val enabled = GeneralPrefs.toposcanEnabled
@@ -55,6 +62,9 @@ class GraphicsDiagnosticActivityTest {
                 assertTrue("Stage $stage never finished: ${GeneralPrefs.toposcanGraphicsStatus}", button != null)
                 val report = GeneralPrefs.toposcanGraphicsStatus
                 for (error in listOf("FAIL", "failed", "TIMEOUT", "SKIPPED", "GL error")) assertFalse(report, report.contains(error))
+                assertTrue(report, report.contains("PixelCopy: OK"))
+                assertTrue(report, report.contains(mode.label))
+                assertTrue(report, report.contains("EGL RGBA 8/8/8/${mode.alphaBits}"))
                 lateinit var surface: ToposcanView
                 instrumentation.runOnMainSync {
                     surface = descendants(activity.window.decorView).filterIsInstance<ToposcanView>().single()
@@ -80,22 +90,27 @@ class GraphicsDiagnosticActivityTest {
                     }
                 assertTrue("Displayed buffer has incorrect pixels at stage $stage", GraphicsDiagnostic.matches(samples))
                 pixels.recycle()
-                if (stage == 5) save("graphics-4k-external", instrumentation.uiAutomation.takeScreenshot())
+                if (stage == 5) save("graphics-${mode.preference}-4k-external", instrumentation.uiAutomation.takeScreenshot())
                 assertTrue("Remote focus is missing", checkNotNull(button).hasFocus())
                 instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_CENTER)
                 instrumentation.waitForIdleSync()
             }
             val report = GeneralPrefs.toposcanGraphicsStatus
             assertEquals(6, Regex(": visible").findAll(report).count())
+            assertEquals(6, Regex("PixelCopy: OK").findAll(report).count())
             assertFalse(report, report.contains("unconfirmed"))
             assertEquals(width, GeneralPrefs.toposcanResolution)
             assertEquals(hdr, GeneralPrefs.toposcanHdrEnabled)
             assertEquals(enabled, GeneralPrefs.toposcanEnabled)
             assertEquals(status, GeneralPrefs.toposcanPlaybackStatus)
+            assertEquals(mode.preference, GeneralPrefs.toposcanSdrSurface)
             Thread.sleep(300)
-            save("graphics-results", instrumentation.uiAutomation.takeScreenshot())
+            save("graphics-${mode.preference}-results", instrumentation.uiAutomation.takeScreenshot())
         } finally {
-            instrumentation.runOnMainSync { activity.finish() }
+            instrumentation.runOnMainSync {
+                activity.finish()
+                GeneralPrefs.toposcanSdrSurface = oldSurface
+            }
         }
     }
 

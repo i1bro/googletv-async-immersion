@@ -89,7 +89,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import javax.microedition.khronos.egl.EGL10
 import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.egl.EGLContext
 import javax.microedition.khronos.opengles.GL10
 
 /** Only the media layer is processed. Android renders clock/weather views above this surface. */
@@ -98,6 +100,7 @@ class ToposcanView(
     context: Context,
     val hdrMode: Boolean = false,
     private val graphicsDiagnostic: GraphicsDiagnostic? = null,
+    private val sdrSurfaceMode: SdrSurfaceMode = SdrSurfaceMode.fromPreference(GeneralPrefs.toposcanSdrSurface),
 ) : GLSurfaceView(context),
     Choreographer.FrameCallback {
     var onSurfaceReady: ((Surface) -> Unit)? = null
@@ -155,9 +158,11 @@ class ToposcanView(
             setEGLWindowSurfaceFactory(hdrEgl)
         } else {
             setEGLContextClientVersion(2)
-            setEGLConfigChooser(8, 8, 8, 0, 0, 0)
+            if (sdrSurfaceMode == SdrSurfaceMode.RGBA) holder.setFormat(PixelFormat.RGBA_8888)
+            setEGLConfigChooser(8, 8, 8, sdrSurfaceMode.alphaBits, 0, 0)
         }
-        setZOrderMediaOverlay(true)
+        // Both modes remain below the app window, so native clock/OSD views stay visible.
+        setZOrderMediaOverlay(hdrMode || sdrSurfaceMode.mediaOverlay)
         preserveEGLContextOnPause = true
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY
@@ -300,6 +305,7 @@ class ToposcanView(
         private var draws = 0L
         private var lastStatus = 0L
         private var gpu = "Unknown GPU"
+        private var outputDescription = ""
         private var surfaceTexture: SurfaceTexture? = null
         private var surface: Surface? = null
         private var oes = 0
@@ -340,6 +346,7 @@ class ToposcanView(
         ) {
             try {
                 gpu = glGetString(GL_RENDERER).orEmpty()
+                outputDescription = describeOutput(config)
                 hasVideoFrame = false
                 if (hdrMode) {
                     check(hdrSupport.available) { hdrSupport.reason }
@@ -602,6 +609,7 @@ class ToposcanView(
             lastStatus = now
             val status =
                 "${if (hdrMode) hdrOutput.label else "SDR"} ${width}x$height / $gpu\n" +
+                    "$outputDescription\n" +
                     "$videoDescription\n" +
                     "Callbacks: ${frameCallbacks.get()} / Frames: $frames / Draws: $draws\n" +
                     "${if (active) timeline.phase.name else "Waiting for decoder frame"}" +
@@ -661,9 +669,25 @@ class ToposcanView(
             if (!diagnosticReported) {
                 probes += "Window: ${test.probe()}"
                 diagnosticReported = true
-                val report = GraphicsDiagnostic.Result(probes.joinToString(" / "), gpu)
+                val report = GraphicsDiagnostic.Result(probes.joinToString(" / "), gpu, outputDescription)
                 post { if (!released) test.onResult(report) }
             }
+        }
+
+        private fun describeOutput(config: EGLConfig?): String {
+            val mode = if (hdrMode) "RGB10_A2 / media overlay" else sdrSurfaceMode.label
+            if (config == null) return mode
+            val egl = EGLContext.getEGL() as EGL10
+            val display = egl.eglGetCurrentDisplay()
+
+            fun attribute(key: Int): String {
+                val result = IntArray(1)
+                return if (egl.eglGetConfigAttrib(display, config, key, result)) result[0].toString() else "?"
+            }
+            val bits =
+                intArrayOf(EGL10.EGL_RED_SIZE, EGL10.EGL_GREEN_SIZE, EGL10.EGL_BLUE_SIZE, EGL10.EGL_ALPHA_SIZE)
+                    .joinToString("/") { attribute(it) }
+            return "$mode; EGL RGBA $bits; visual ${attribute(EGL10.EGL_NATIVE_VISUAL_ID)}"
         }
 
         private fun copySource(video: Boolean) {
@@ -785,7 +809,7 @@ class ToposcanView(
             post {
                 if (!released) {
                     if (graphicsDiagnostic != null) {
-                        graphicsDiagnostic.onResult(GraphicsDiagnostic.Result("Renderer failed: ${e.message}", gpu))
+                        graphicsDiagnostic.onResult(GraphicsDiagnostic.Result("Renderer failed: ${e.message}", gpu, outputDescription))
                         return@post
                     }
                     GeneralPrefs.toposcanPlaybackStatus = "Renderer failed: ${e.message}\n${GeneralPrefs.toposcanPlaybackStatus}"
