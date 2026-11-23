@@ -1,1 +1,1 @@
-Drafted by the agent.
+Finished in a take-over.
